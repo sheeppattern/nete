@@ -352,3 +352,47 @@ func TestListNotesPartial(t *testing.T) {
 		t.Fatalf("ListNotesPartial errors = %d; want 1", len(noteErrors))
 	}
 }
+
+func TestNoteLayerRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init() error: %v", err)
+	}
+
+	note := model.NewNote("Abstract Note", "insight content", nil)
+	note.Layer = "abstract"
+	if err := s.CreateNote(note); err != nil {
+		t.Fatalf("CreateNote() error: %v", err)
+	}
+
+	got, err := s.GetNote("", note.ID)
+	if err != nil {
+		t.Fatalf("GetNote() error: %v", err)
+	}
+	if got.Layer != "abstract" {
+		t.Fatalf("Layer = %q; want %q", got.Layer, "abstract")
+	}
+}
+
+func TestNoteLayerDefault(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init() error: %v", err)
+	}
+
+	note := model.NewNote("Default Layer Note", "content", nil)
+	// Do not explicitly set Layer; NewNote should default to "concrete".
+	if err := s.CreateNote(note); err != nil {
+		t.Fatalf("CreateNote() error: %v", err)
+	}
+
+	got, err := s.GetNote("", note.ID)
+	if err != nil {
+		t.Fatalf("GetNote() error: %v", err)
+	}
+	if got.Layer != "concrete" {
+		t.Fatalf("Layer = %q; want %q", got.Layer, "concrete")
+	}
+}

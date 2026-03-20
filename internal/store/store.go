@@ -312,6 +312,7 @@ func (s *Store) marshalNote(note *model.Note) ([]byte, error) {
 		Links:     note.Links,
 		Metadata:  note.Metadata,
 		ProjectID: note.ProjectID,
+		Layer:     note.Layer,
 	}
 	yamlData, err := yaml.Marshal(&fm)
 	if err != nil {
@@ -375,6 +376,7 @@ func (s *Store) unmarshalNote(data []byte) (*model.Note, error) {
 		Links:     fm.Links,
 		Metadata:  fm.Metadata,
 		ProjectID: fm.ProjectID,
+		Layer:     fm.Layer,
 	}
 	return note, nil
 }

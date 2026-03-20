@@ -90,13 +90,14 @@ func TestRelationTypes(t *testing.T) {
 	customRelationTypes = nil
 
 	types := ValidRelationTypes()
-	if len(types) != 6 {
-		t.Fatalf("ValidRelationTypes() returned %d types; want 6", len(types))
+	if len(types) != 8 {
+		t.Fatalf("ValidRelationTypes() returned %d types; want 8", len(types))
 	}
 
 	expected := []string{
 		RelRelated, RelSupports, RelContradicts,
 		RelExtends, RelCauses, RelExampleOf,
+		RelAbstracts, RelGrounds,
 	}
 	for _, e := range expected {
 		if !IsValidRelationType(e) {
@@ -155,5 +156,52 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.DefaultFormat != "md" {
 		t.Fatalf("DefaultFormat = %q; want %q", cfg.DefaultFormat, "md")
+	}
+}
+
+func TestNewNoteDefaultLayer(t *testing.T) {
+	n := NewNote("Layer Test", "content", nil)
+	if n.Layer != "concrete" {
+		t.Fatalf("NewNote Layer = %q; want %q", n.Layer, "concrete")
+	}
+}
+
+func TestLayerConstants(t *testing.T) {
+	if LayerConcrete != "concrete" {
+		t.Fatalf("LayerConcrete = %q; want %q", LayerConcrete, "concrete")
+	}
+	if LayerAbstract != "abstract" {
+		t.Fatalf("LayerAbstract = %q; want %q", LayerAbstract, "abstract")
+	}
+}
+
+func TestNewRelationTypes(t *testing.T) {
+	// Reset custom types for a clean test.
+	customRelationTypes = nil
+
+	types := ValidRelationTypes()
+	// "abstracts" and "grounds" should be in the built-in list.
+	foundAbstracts := false
+	foundGrounds := false
+	for _, rt := range types {
+		if rt == RelAbstracts {
+			foundAbstracts = true
+		}
+		if rt == RelGrounds {
+			foundGrounds = true
+		}
+	}
+	if !foundAbstracts {
+		t.Fatalf("ValidRelationTypes() does not include %q", RelAbstracts)
+	}
+	if !foundGrounds {
+		t.Fatalf("ValidRelationTypes() does not include %q", RelGrounds)
+	}
+
+	if !IsValidRelationType(RelAbstracts) {
+		t.Fatalf("IsValidRelationType(%q) = false; want true", RelAbstracts)
+	}
+	if !IsValidRelationType(RelGrounds) {
+		t.Fatalf("IsValidRelationType(%q) = false; want true", RelGrounds)
 	}
 }

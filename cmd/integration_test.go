@@ -596,5 +596,175 @@ func TestCLIOutputFormat(t *testing.T) {
 	}
 }
 
+func TestCLINoteLayer(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "layer-proj", "")
+
+	// Create a concrete note (default layer).
+	concreteID := createNote(t, storeDir, projID, "Concrete Note", "concrete content", nil)
+
+	// Create an abstract note using --layer abstract.
+	stdout := mustRunZK(t, storeDir, "note", "create", "--title", "Abstract Note", "--content", "abstract content", "--layer", "abstract", "--project", projID)
+	var absNote map[string]interface{}
+	parseJSON(t, stdout, &absNote)
+	abstractID := absNote["id"].(string)
+	if abstractID == "" {
+		t.Fatal("abstract note create did not return an id")
+	}
+
+	// note list --layer concrete → only concrete note
+	stdout = mustRunZK(t, storeDir, "note", "list", "--project", projID, "--layer", "concrete")
+	var notes []map[string]interface{}
+	parseJSON(t, stdout, &notes)
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 concrete note, got %d", len(notes))
+	}
+	if notes[0]["id"] != concreteID {
+		t.Errorf("expected concrete note id %s, got %v", concreteID, notes[0]["id"])
+	}
+
+	// note list --layer abstract → only abstract note
+	stdout = mustRunZK(t, storeDir, "note", "list", "--project", projID, "--layer", "abstract")
+	parseJSON(t, stdout, &notes)
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 abstract note, got %d", len(notes))
+	}
+	if notes[0]["id"] != abstractID {
+		t.Errorf("expected abstract note id %s, got %v", abstractID, notes[0]["id"])
+	}
+
+	// note list (no --layer) → both notes
+	stdout = mustRunZK(t, storeDir, "note", "list", "--project", projID)
+	parseJSON(t, stdout, &notes)
+	if len(notes) != 2 {
+		t.Fatalf("expected 2 notes without layer filter, got %d", len(notes))
+	}
+}
+
+func TestCLIReflect(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "reflect-proj", "")
+
+	// Create 3 concrete notes.
+	n1 := createNote(t, storeDir, projID, "Note One", "content one", nil)
+	n2 := createNote(t, storeDir, projID, "Note Two", "content two", nil)
+	n3 := createNote(t, storeDir, projID, "Note Three", "content three", nil)
+	_ = n3 // n3 is left unlinked (orphan)
+
+	// Link N1 → N2 with --type contradicts (tension).
+	mustRunZK(t, storeDir, "link", "add", n1, n2, "--type", "contradicts", "--project", projID)
+
+	// Run reflect.
+	stdout := mustRunZK(t, storeDir, "reflect", "--project", projID, "--format", "json")
+	var report struct {
+		Insights []struct {
+			Type        string   `json:"type"`
+			SourceNotes []string `json:"source_notes"`
+			Suggestion  string   `json:"suggestion"`
+		} `json:"insights"`
+		Stats struct {
+			ConcreteCount int `json:"concrete_count"`
+			AbstractCount int `json:"abstract_count"`
+		} `json:"stats"`
+	}
+	parseJSON(t, stdout, &report)
+
+	// Verify stats.
+	if report.Stats.ConcreteCount != 3 {
+		t.Errorf("expected concrete_count=3, got %d", report.Stats.ConcreteCount)
+	}
+	if report.Stats.AbstractCount != 0 {
+		t.Errorf("expected abstract_count=0, got %d", report.Stats.AbstractCount)
+	}
+
+	// Verify insights contain "tension" type.
+	foundTension := false
+	foundOrphan := false
+	for _, ins := range report.Insights {
+		if ins.Type == "tension" {
+			foundTension = true
+		}
+		if ins.Type == "orphan_cluster" {
+			foundOrphan = true
+		}
+	}
+	if !foundTension {
+		t.Error("expected insight of type 'tension' in reflect output")
+	}
+	if !foundOrphan {
+		t.Error("expected insight of type 'orphan_cluster' in reflect output")
+	}
+}
+
+func TestCLIReflectApply(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "reflect-apply-proj", "")
+
+	// Create 2 concrete notes linked with contradicts.
+	n1 := createNote(t, storeDir, projID, "Thesis", "thesis content", nil)
+	n2 := createNote(t, storeDir, projID, "Antithesis", "antithesis content", nil)
+	mustRunZK(t, storeDir, "link", "add", n1, n2, "--type", "contradicts", "--project", projID)
+
+	// Run reflect --apply.
+	mustRunZK(t, storeDir, "reflect", "--project", projID, "--apply", "--format", "json")
+
+	// note list --layer abstract → at least 1 abstract note was created.
+	stdout := mustRunZK(t, storeDir, "note", "list", "--project", projID, "--layer", "abstract")
+	var abstractNotes []map[string]interface{}
+	parseJSON(t, stdout, &abstractNotes)
+	if len(abstractNotes) < 1 {
+		t.Fatalf("expected at least 1 abstract note after reflect --apply, got %d", len(abstractNotes))
+	}
+
+	// Verify source note has an "abstracts" link.
+	stdout = mustRunZK(t, storeDir, "link", "list", n1, "--project", projID)
+	var linkResult struct {
+		Outgoing []map[string]interface{} `json:"outgoing"`
+		Incoming []map[string]interface{} `json:"incoming"`
+	}
+	parseJSON(t, stdout, &linkResult)
+
+	foundAbstracts := false
+	for _, link := range linkResult.Outgoing {
+		if link["relation_type"] == "abstracts" {
+			foundAbstracts = true
+			break
+		}
+	}
+	if !foundAbstracts {
+		t.Error("expected source note to have an 'abstracts' link after reflect --apply")
+	}
+}
+
+func TestCLISearchLayer(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "search-layer-proj", "")
+
+	// Create 1 concrete + 1 abstract note.
+	createNote(t, storeDir, projID, "Concrete Search", "concrete content for search", []string{"search"})
+	mustRunZK(t, storeDir, "note", "create", "--title", "Abstract Search", "--content", "abstract content for search", "--layer", "abstract", "--tags", "search", "--project", projID)
+
+	// Search with --layer concrete → only concrete.
+	stdout := mustRunZK(t, storeDir, "search", "search", "--project", projID, "--layer", "concrete")
+	var results []map[string]interface{}
+	parseJSON(t, stdout, &results)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 concrete search result, got %d", len(results))
+	}
+	if results[0]["title"] != "Concrete Search" {
+		t.Errorf("expected title 'Concrete Search', got %v", results[0]["title"])
+	}
+
+	// Search with --layer abstract → only abstract.
+	stdout = mustRunZK(t, storeDir, "search", "search", "--project", projID, "--layer", "abstract")
+	parseJSON(t, stdout, &results)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 abstract search result, got %d", len(results))
+	}
+	if results[0]["title"] != "Abstract Search" {
+		t.Errorf("expected title 'Abstract Search', got %v", results[0]["title"])
+	}
+}
+
 // Prevent unused import warning for fmt.
 var _ = fmt.Sprintf
