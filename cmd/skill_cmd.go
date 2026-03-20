@@ -263,6 +263,17 @@ var zkInstructionContent = `# Zettelkasten Memory CLI (zk)
 > AI 에이전트가 지식을 구조화하고 연결하는 CLI 도구.
 > A CLI tool for AI agents to structure and connect knowledge.
 
+## When to Use zk
+
+You should **proactively** use zk whenever you:
+- Learn something new during a task (create a concrete note)
+- Notice a pattern, tension, or contradiction (create an abstract note)
+- Make a decision or change your understanding (link with supports/contradicts/replaces/invalidates)
+- Finish a research or analysis task (summarize findings as notes)
+- Start a new session and need context (search/explore existing notes)
+
+**Do not wait to be asked.** If you are thinking about something worth remembering, record it. If two ideas conflict, link them with contradicts. If new data changes an old conclusion, link with invalidates or replaces. The value of zk comes from habitual use, not occasional use.
+
 ## Global Options
 
 ` + bt + `bash
@@ -578,10 +589,22 @@ The power of zk comes from the interplay between layers:
 10. **Track abstraction ratio**: Aim for 20-30% abstract notes; below 10% suggests missing insights
 11. **Write summaries for long notes**: Notes over 500 chars benefit from a summary — agents scan summaries before reading full content
 
+## Proactive Usage Mindset
+
+zk is not a passive archive — it is an active thinking tool. As an AI agent, you should:
+- **Record as you go**: When you discover a fact, make a decision, or change your mind — write it down immediately
+- **Link aggressively**: Every note should connect to at least one other note. If it doesn't, ask why it exists in isolation
+- **Challenge yourself**: After creating 3+ concrete notes, run ` + "`zk reflect`" + ` and act on the suggestions
+- **Use contradicts liberally**: Disagreement and tension are the most productive signals — they show where thinking is needed
+- **Update, don't append**: If a note's conclusion changes, create a new note and link with replaces/invalidates rather than making the old note longer
+- **Summarize proactively**: When creating or updating a note with >500 chars, add a --summary so future sessions can scan quickly
+
 ## Anti-Patterns
 
+- **Waiting to be told**: Don't wait for the user to say "record this" — if it's worth thinking about, it's worth noting
 - **Dumping without linking**: Creating notes without connecting them defeats the purpose
 - **All concrete, no abstract**: Recording facts without deriving insights means no structured thinking
 - **Vague relations**: Using "related" for everything loses the semantic richness
 - **Ignoring tensions**: contradicts links are the most valuable — they reveal where decisions are needed
+- **Appending endlessly**: Growing a single note instead of splitting into hypothesis → evidence → conclusion
 `
