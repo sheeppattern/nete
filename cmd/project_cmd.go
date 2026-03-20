@@ -28,6 +28,7 @@ var projectCmd = &cobra.Command{
 var projectCreateCmd = &cobra.Command{
 	Use:   "create <name>",
 	Short: "Create a new project",
+	Example: `  zk project create "my-research" --description "Research project"`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
@@ -47,6 +48,8 @@ var projectCreateCmd = &cobra.Command{
 var projectListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all projects",
+	Example: `  zk project list
+  zk project list --format md`,
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s := store.NewStore(getStorePath(cmd))
@@ -63,6 +66,8 @@ var projectListCmd = &cobra.Command{
 var projectGetCmd = &cobra.Command{
 	Use:   "get <id>",
 	Short: "Get a project by ID",
+	Example: `  zk project get P-XXXXXX
+  zk project get P-XXXXXX --format md`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id := args[0]
@@ -127,6 +132,7 @@ var projectGetCmd = &cobra.Command{
 var projectDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
 	Short: "Delete a project by ID",
+	Example: `  zk project delete P-XXXXXX`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id := args[0]

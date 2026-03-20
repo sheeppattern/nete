@@ -73,9 +73,10 @@ type Project struct {
 
 // Config holds CLI configuration.
 type Config struct {
-	StorePath     string `yaml:"store_path"      json:"store_path"`
-	DefaultProject string `yaml:"default_project" json:"default_project"`
-	DefaultFormat string `yaml:"default_format"  json:"default_format"`
+	StorePath           string   `yaml:"store_path"      json:"store_path"`
+	DefaultProject      string   `yaml:"default_project" json:"default_project"`
+	DefaultFormat       string   `yaml:"default_format"  json:"default_format"`
+	CustomRelationTypes []string `yaml:"custom_relation_types,omitempty" json:"custom_relation_types,omitempty"`
 }
 
 // GenerateID produces an ID like "N-ABCDEF" using the given prefix
@@ -133,9 +134,35 @@ func DefaultConfig() *Config {
 	}
 }
 
-// ValidRelationTypes returns all valid relation type constants.
+// customRelationTypes holds user-registered relation types beyond the built-in set.
+var customRelationTypes []string
+
+// RegisterRelationType adds a custom relation type if it doesn't already exist.
+func RegisterRelationType(rt string) {
+	for _, existing := range customRelationTypes {
+		if existing == rt {
+			return
+		}
+	}
+	customRelationTypes = append(customRelationTypes, rt)
+}
+
+// CustomRelationTypes returns only the user-registered custom relation types.
+func CustomRelationTypes() []string {
+	result := make([]string, len(customRelationTypes))
+	copy(result, customRelationTypes)
+	return result
+}
+
+// LoadCustomRelationTypes replaces the custom relation types from a config slice.
+func LoadCustomRelationTypes(types []string) {
+	customRelationTypes = make([]string, len(types))
+	copy(customRelationTypes, types)
+}
+
+// ValidRelationTypes returns all valid relation type constants (built-in + custom).
 func ValidRelationTypes() []string {
-	return []string{
+	builtIn := []string{
 		RelRelated,
 		RelSupports,
 		RelContradicts,
@@ -143,9 +170,10 @@ func ValidRelationTypes() []string {
 		RelCauses,
 		RelExampleOf,
 	}
+	return append(builtIn, customRelationTypes...)
 }
 
-// IsValidRelationType checks whether the given relation type is valid.
+// IsValidRelationType checks whether the given relation type is valid (built-in or custom).
 func IsValidRelationType(rt string) bool {
 	for _, valid := range ValidRelationTypes() {
 		if rt == valid {

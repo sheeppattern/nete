@@ -15,7 +15,9 @@ var configCmd = &cobra.Command{
 var configShowCmd = &cobra.Command{
 	Use:   "show",
 	Short: "Show current configuration",
-	Args:  cobra.NoArgs,
+	Example: `  zk config show
+  zk config show --format yaml`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s := store.NewStore(getStorePath(cmd))
 		cfg, err := s.LoadConfig()
@@ -29,7 +31,9 @@ var configShowCmd = &cobra.Command{
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
 	Short: "Set a configuration value",
-	Args:  cobra.ExactArgs(2),
+	Example: `  zk config set default_project P-XXXXXX
+  zk config set default_format yaml`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		key, value := args[0], args[1]
 
@@ -50,7 +54,7 @@ var configSetCmd = &cobra.Command{
 			}
 			cfg.DefaultFormat = value
 		default:
-			return fmt.Errorf("unknown config key %q: valid keys are store_path, default_project, default_format", key)
+			return fmt.Errorf("unknown config key %q; valid keys: store_path, default_project, default_format", key)
 		}
 
 		if err := s.SaveConfig(cfg); err != nil {

@@ -3,11 +3,22 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/sheeppattern/zk/internal/model"
 	"github.com/sheeppattern/zk/internal/store"
+	"gopkg.in/yaml.v3"
 )
+
+// NoteTemplate defines a reusable template for note creation.
+type NoteTemplate struct {
+	TitlePrefix     string   `yaml:"title_prefix"`
+	DefaultTags     []string `yaml:"default_tags"`
+	DefaultStatus   string   `yaml:"default_status"`
+	ContentTemplate string   `yaml:"content_template"`
+}
 
 var noteCmd = &cobra.Command{
 	Use:   "note",
@@ -18,10 +29,82 @@ var noteCmd = &cobra.Command{
 var noteCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new note",
+	Example: `  zk note create --title "Discovery" --content "Found something" --tags "research,important"
+  zk note create --title "Idea" --content "..." --project P-XXXXXX
+  zk note create --title "Paper Notes" --template research --project P-XXXXXX`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title, _ := cmd.Flags().GetString("title")
 		content, _ := cmd.Flags().GetString("content")
 		tags, _ := cmd.Flags().GetStringSlice("tags")
+		templateName, _ := cmd.Flags().GetString("template")
+
+		storePath := getStorePath(cmd)
+
+		// Apply template if specified.
+		if templateName != "" {
+			tmplPath := filepath.Join(storePath, "templates", templateName+".yaml")
+			tmplData, err := os.ReadFile(tmplPath)
+			if err != nil {
+				return fmt.Errorf("template %q not found at %s: %w", templateName, tmplPath, err)
+			}
+			var tmpl NoteTemplate
+			if err := yaml.Unmarshal(tmplData, &tmpl); err != nil {
+				return fmt.Errorf("parse template %q: %w", templateName, err)
+			}
+
+			// Prepend title_prefix to --title.
+			if tmpl.TitlePrefix != "" {
+				title = tmpl.TitlePrefix + title
+			}
+
+			// Merge default_tags with --tags (template tags first, user tags appended).
+			if len(tmpl.DefaultTags) > 0 {
+				merged := make([]string, 0, len(tmpl.DefaultTags)+len(tags))
+				merged = append(merged, tmpl.DefaultTags...)
+				for _, t := range tags {
+					// Avoid duplicates from user tags.
+					dup := false
+					for _, dt := range tmpl.DefaultTags {
+						if strings.EqualFold(t, dt) {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						merged = append(merged, t)
+					}
+				}
+				tags = merged
+			}
+
+			// If --content is empty, use content_template as content.
+			if content == "" && tmpl.ContentTemplate != "" {
+				content = tmpl.ContentTemplate
+			}
+
+			// Set status from template if not overridden by a flag (noteCreateCmd has no --status flag,
+			// so template status always applies when present).
+			if tmpl.DefaultStatus != "" {
+				// Will be applied after note creation below.
+			}
+
+			note := model.NewNote(title, content, tags)
+
+			if tmpl.DefaultStatus != "" {
+				note.Metadata.Status = tmpl.DefaultStatus
+			}
+
+			if flagProject != "" {
+				note.ProjectID = flagProject
+			}
+
+			s := store.NewStore(storePath)
+			if err := s.CreateNote(note); err != nil {
+				return fmt.Errorf("create note: %w", err)
+			}
+
+			return getFormatter().PrintNote(note)
+		}
 
 		note := model.NewNote(title, content, tags)
 
@@ -29,7 +112,7 @@ var noteCreateCmd = &cobra.Command{
 			note.ProjectID = flagProject
 		}
 
-		s := store.NewStore(getStorePath(cmd))
+		s := store.NewStore(storePath)
 		if err := s.CreateNote(note); err != nil {
 			return fmt.Errorf("create note: %w", err)
 		}
@@ -41,14 +124,16 @@ var noteCreateCmd = &cobra.Command{
 var noteGetCmd = &cobra.Command{
 	Use:   "get <id>",
 	Short: "Get a note by ID",
-	Args:  cobra.ExactArgs(1),
+	Example: `  zk note get N-XXXXXX --project P-XXXXXX
+  zk note get N-XXXXXX --format md`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noteID := args[0]
 
 		s := store.NewStore(getStorePath(cmd))
 		note, err := s.GetNote(flagProject, noteID)
 		if err != nil {
-			return fmt.Errorf("get note: %w", err)
+			return fmt.Errorf("note %s not found in project %s (check note ID and --project flag)", noteID, flagProject)
 		}
 
 		return getFormatter().PrintNote(note)
@@ -58,6 +143,8 @@ var noteGetCmd = &cobra.Command{
 var noteListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all notes",
+	Example: `  zk note list --project P-XXXXXX
+  zk note list --format md`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s := store.NewStore(getStorePath(cmd))
 		notes, err := s.ListNotes(flagProject)
@@ -72,14 +159,16 @@ var noteListCmd = &cobra.Command{
 var noteUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update an existing note",
-	Args:  cobra.ExactArgs(1),
+	Example: `  zk note update N-XXXXXX --title "New Title" --project P-XXXXXX
+  zk note update N-XXXXXX --tags "new-tag" --status archived`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noteID := args[0]
 
 		s := store.NewStore(getStorePath(cmd))
 		note, err := s.GetNote(flagProject, noteID)
 		if err != nil {
-			return fmt.Errorf("get note for update: %w", err)
+			return fmt.Errorf("note %s not found in project %s (check note ID and --project flag)", noteID, flagProject)
 		}
 
 		if cmd.Flags().Changed("title") {
@@ -106,7 +195,9 @@ var noteUpdateCmd = &cobra.Command{
 var noteDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
 	Short: "Delete a note by ID",
-	Args:  cobra.ExactArgs(1),
+	Example: `  zk note delete N-XXXXXX --project P-XXXXXX
+  zk note delete N-XXXXXX --force --project P-XXXXXX`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noteID := args[0]
 		force, _ := cmd.Flags().GetBool("force")
@@ -143,13 +234,35 @@ var noteDeleteCmd = &cobra.Command{
 	},
 }
 
+var noteMoveCmd = &cobra.Command{
+	Use:   "move <noteID> <targetProject>",
+	Short: "Move a note to a different project",
+	Example: `  zk note move N-XXXXXX P-TARGET --project P-SOURCE
+  zk note move N-XXXXXX P-TARGET`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		noteID := args[0]
+		targetProject := args[1]
+
+		s := store.NewStore(getStorePath(cmd))
+
+		if err := s.MoveNote(noteID, flagProject, targetProject); err != nil {
+			return fmt.Errorf("note %s not found in project %s (verify the note exists with: zk note list --project %s)",
+				noteID, flagProject, flagProject)
+		}
+
+		statusf("moved note %s from project %s to %s", noteID, flagProject, targetProject)
+		return nil
+	},
+}
+
 func init() {
 	// noteCreateCmd flags
 	noteCreateCmd.Flags().String("title", "", "note title (required)")
 	noteCreateCmd.Flags().String("content", "", "note content (required)")
 	noteCreateCmd.Flags().StringSlice("tags", nil, "comma-separated tags")
+	noteCreateCmd.Flags().String("template", "", "template name (loads from {store}/templates/{name}.yaml)")
 	_ = noteCreateCmd.MarkFlagRequired("title")
-	_ = noteCreateCmd.MarkFlagRequired("content")
 
 	// noteUpdateCmd flags
 	noteUpdateCmd.Flags().String("title", "", "new title")
@@ -166,6 +279,7 @@ func init() {
 	noteCmd.AddCommand(noteListCmd)
 	noteCmd.AddCommand(noteUpdateCmd)
 	noteCmd.AddCommand(noteDeleteCmd)
+	noteCmd.AddCommand(noteMoveCmd)
 
 	rootCmd.AddCommand(noteCmd)
 }

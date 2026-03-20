@@ -37,11 +37,21 @@ type LinkWithSource struct {
 	Depth        int     `json:"depth" yaml:"depth"`
 }
 
+// IncomingLink represents a backlink from any project, including cross-project backlinks.
+type IncomingLink struct {
+	SourceNoteID  string  `json:"source_note_id" yaml:"source_note_id"`
+	SourceProject string  `json:"source_project" yaml:"source_project"`
+	RelationType  string  `json:"relation_type" yaml:"relation_type"`
+	Weight        float64 `json:"weight" yaml:"weight"`
+}
+
 var linkAddCmd = &cobra.Command{
 	Use:   "add <sourceID> <targetID>",
 	Short: "Add a bidirectional link between two notes",
 	Long:  "Add a bidirectional link. Use --target-project for cross-project links.",
-	Args:  cobra.ExactArgs(2),
+	Example: `  zk link add N-AAAAAA N-BBBBBB --type supports --weight 0.8 --project P-XXXXXX
+  zk link add N-AAAAAA N-BBBBBB --type extends --project P-111 --target-project P-222`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sourceID := args[0]
 		targetID := args[1]
@@ -125,6 +135,7 @@ var linkAddCmd = &cobra.Command{
 var linkRemoveCmd = &cobra.Command{
 	Use:   "remove <sourceID> <targetID>",
 	Short: "Remove a bidirectional link between two notes",
+	Example: `  zk link remove N-AAAAAA N-BBBBBB --project P-XXXXXX`,
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sourceID := args[0]
@@ -161,7 +172,10 @@ var linkRemoveCmd = &cobra.Command{
 var linkListCmd = &cobra.Command{
 	Use:   "list <noteID>",
 	Short: "List outgoing and incoming links for a note",
-	Args:  cobra.ExactArgs(1),
+	Example: `  zk link list N-XXXXXX --project P-XXXXXX
+  zk link list N-XXXXXX --type supports --sort-weight
+  zk link list N-XXXXXX --depth 3 --project P-XXXXXX`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noteID := args[0]
 
@@ -185,24 +199,75 @@ var linkListCmd = &cobra.Command{
 
 		outgoing := note.Links
 
-		// Scan all notes in the project to find incoming links (backlinks).
+		// Scan all notes in the current project to find incoming links (backlinks).
 		allNotes, err := s.ListNotes(flagProject)
 		if err != nil {
 			return fmt.Errorf("list notes: %w", err)
 		}
 
-		var incoming []model.Link
+		var incoming []IncomingLink
 		for _, n := range allNotes {
 			if n.ID == noteID {
 				continue
 			}
 			for _, l := range n.Links {
 				if l.TargetID == noteID {
-					incoming = append(incoming, model.Link{
-						TargetID:     n.ID,
-						RelationType: l.RelationType,
-						Weight:       l.Weight,
+					incoming = append(incoming, IncomingLink{
+						SourceNoteID:  n.ID,
+						SourceProject: flagProject,
+						RelationType:  l.RelationType,
+						Weight:        l.Weight,
 					})
+				}
+			}
+		}
+
+		// Cross-project backlink scan: check other projects for notes linking to noteID.
+		projects, err := s.ListProjects()
+		if err != nil {
+			debugf("could not list projects for cross-project backlinks: %v", err)
+		} else {
+			for _, p := range projects {
+				if p.ID == flagProject {
+					continue
+				}
+				projectNotes, err := s.ListNotes(p.ID)
+				if err != nil {
+					debugf("could not list notes for project %s: %v", p.ID, err)
+					continue
+				}
+				for _, n := range projectNotes {
+					for _, l := range n.Links {
+						if l.TargetID == noteID {
+							incoming = append(incoming, IncomingLink{
+								SourceNoteID:  n.ID,
+								SourceProject: p.ID,
+								RelationType:  l.RelationType,
+								Weight:        l.Weight,
+							})
+						}
+					}
+				}
+			}
+		}
+
+		// Also scan global notes if flagProject is not empty (i.e. we are in a project scope).
+		if flagProject != "" {
+			globalNotes, err := s.ListNotes("")
+			if err != nil {
+				debugf("could not list global notes for cross-project backlinks: %v", err)
+			} else {
+				for _, n := range globalNotes {
+					for _, l := range n.Links {
+						if l.TargetID == noteID {
+							incoming = append(incoming, IncomingLink{
+								SourceNoteID:  n.ID,
+								SourceProject: "",
+								RelationType:  l.RelationType,
+								Weight:        l.Weight,
+							})
+						}
+					}
 				}
 			}
 		}
@@ -210,7 +275,7 @@ var linkListCmd = &cobra.Command{
 		// Filter by --type if set.
 		if typeFilter != "" {
 			outgoing = filterLinksByType(outgoing, typeFilter)
-			incoming = filterLinksByType(incoming, typeFilter)
+			incoming = filterIncomingByType(incoming, typeFilter)
 		}
 
 		// Sort by weight descending if --sort-weight is set.
@@ -224,8 +289,8 @@ var linkListCmd = &cobra.Command{
 		}
 
 		result := struct {
-			Outgoing []model.Link `json:"outgoing" yaml:"outgoing"`
-			Incoming []model.Link `json:"incoming" yaml:"incoming"`
+			Outgoing []model.Link   `json:"outgoing" yaml:"outgoing"`
+			Incoming []IncomingLink `json:"incoming" yaml:"incoming"`
 		}{
 			Outgoing: outgoing,
 			Incoming: incoming,
@@ -235,7 +300,7 @@ var linkListCmd = &cobra.Command{
 			result.Outgoing = []model.Link{}
 		}
 		if result.Incoming == nil {
-			result.Incoming = []model.Link{}
+			result.Incoming = []IncomingLink{}
 		}
 
 		switch f.Format {
@@ -311,6 +376,17 @@ func linkListBFS(s *store.Store, f *output.Formatter, noteID, typeFilter string,
 // filterLinksByType returns only links matching the given relation type (case-insensitive).
 func filterLinksByType(links []model.Link, relType string) []model.Link {
 	var filtered []model.Link
+	for _, l := range links {
+		if strings.EqualFold(l.RelationType, relType) {
+			filtered = append(filtered, l)
+		}
+	}
+	return filtered
+}
+
+// filterIncomingByType returns only incoming links matching the given relation type (case-insensitive).
+func filterIncomingByType(links []IncomingLink, relType string) []IncomingLink {
+	var filtered []IncomingLink
 	for _, l := range links {
 		if strings.EqualFold(l.RelationType, relType) {
 			filtered = append(filtered, l)

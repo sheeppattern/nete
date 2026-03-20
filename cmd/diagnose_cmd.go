@@ -37,8 +37,10 @@ type DiagnosticSummary struct {
 var diagnoseCmd = &cobra.Command{
 	Use:   "diagnose",
 	Short: "Diagnose storage for broken links, orphans, and invalid data",
-	Long:  "Run diagnostic checks on the note store to find broken links, orphan notes, invalid relation types, invalid weights, and duplicate IDs.",
-	RunE:  runDiagnose,
+	Long: "Run diagnostic checks on the note store to find broken links, orphan notes, invalid relation types, invalid weights, and duplicate IDs.",
+	Example: `  zk diagnose --project P-XXXXXX
+  zk diagnose --format md`,
+	RunE: runDiagnose,
 }
 
 func init() {

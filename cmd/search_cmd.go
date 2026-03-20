@@ -14,8 +14,11 @@ import (
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Search notes by query",
-	Long:  "Search notes by matching a query string against title, content, and tags. Supports filtering by tags, relation type, link weight, and status.",
-	Args:  cobra.ExactArgs(1),
+	Long: "Search notes by matching a query string against title, content, and tags. Supports filtering by tags, relation type, link weight, and status.",
+	Example: `  zk search "Redis" --project P-XXXXXX
+  zk search "auth" --tags "security" --relation contradicts --min-weight 0.5
+  zk search "data" --created-after 2026-01-01 --sort created`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		query := strings.ToLower(args[0])
 

@@ -12,7 +12,9 @@ import (
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize the Zettelkasten storage",
-	Long:  "Creates the root directory structure for the Zettelkasten memory store.",
+	Long:    "Creates the root directory structure for the Zettelkasten memory store.",
+	Example: `  zk init
+  zk init --path /custom/store`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		storePath := getStorePath(cmd)
 

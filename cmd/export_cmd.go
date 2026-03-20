@@ -61,7 +61,9 @@ func exportToNote(e *NoteExport) *model.Note {
 var exportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "Export notes to a file",
-	Long:  "Export notes as JSON or YAML. Exports all notes by default, or specific notes via --notes flag.",
+	Long: "Export notes as JSON or YAML. Exports all notes by default, or specific notes via --notes flag.",
+	Example: `  zk export --project P-XXXXXX --format yaml --output backup.yaml
+  zk export --project P-XXXXXX --notes N-AAAAAA,N-BBBBBB`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		outputPath, _ := cmd.Flags().GetString("output")
 		noteIDs, _ := cmd.Flags().GetStringSlice("notes")
@@ -142,7 +144,9 @@ var exportCmd = &cobra.Command{
 var importCmd = &cobra.Command{
 	Use:   "import",
 	Short: "Import notes from a file",
-	Long:  "Import notes from a JSON or YAML export file. Use --conflict to control how duplicate IDs are handled.",
+	Long: "Import notes from a JSON or YAML export file. Use --conflict to control how duplicate IDs are handled.",
+	Example: `  zk import --file backup.yaml --project P-XXXXXX
+  zk import --file data.json --conflict overwrite --project P-XXXXXX`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		filePath, _ := cmd.Flags().GetString("file")
 		conflict, _ := cmd.Flags().GetString("conflict")

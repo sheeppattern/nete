@@ -19,6 +19,7 @@ var tagCmd = &cobra.Command{
 var tagAddCmd = &cobra.Command{
 	Use:   "add <noteID> <tag1> [tag2...]",
 	Short: "Add tags to a note",
+	Example: `  zk tag add N-XXXXXX important urgent --project P-XXXXXX`,
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noteID := args[0]
@@ -52,6 +53,7 @@ var tagAddCmd = &cobra.Command{
 var tagRemoveCmd = &cobra.Command{
 	Use:   "remove <noteID> <tag1> [tag2...]",
 	Short: "Remove tags from a note",
+	Example: `  zk tag remove N-XXXXXX draft --project P-XXXXXX`,
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noteID := args[0]
@@ -87,6 +89,7 @@ var tagRemoveCmd = &cobra.Command{
 var tagReplaceCmd = &cobra.Command{
 	Use:   "replace <oldTag> <newTag>",
 	Short: "Replace a tag across all notes in the project",
+	Example: `  zk tag replace old-tag new-tag --project P-XXXXXX`,
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		oldTag := args[0]
@@ -135,6 +138,7 @@ var tagReplaceCmd = &cobra.Command{
 var tagListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all unique tags in the project",
+	Example: `  zk tag list --project P-XXXXXX`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s := store.NewStore(getStorePath(cmd))
 		notes, err := s.ListNotes(flagProject)
@@ -177,6 +181,7 @@ var tagListCmd = &cobra.Command{
 var tagBatchAddCmd = &cobra.Command{
 	Use:   "batch-add <tag> <noteID1> [noteID2...]",
 	Short: "Add a tag to multiple notes",
+	Example: `  zk tag batch-add reviewed N-AAAAAA N-BBBBBB N-CCCCCC --project P-XXXXXX`,
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tag := args[0]

@@ -75,7 +75,7 @@ func (s *Store) SaveConfig(cfg *model.Config) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return os.WriteFile(filepath.Join(s.rootPath, "config.yaml"), data, 0644)
+	return s.atomicWriteFile(filepath.Join(s.rootPath, "config.yaml"), data)
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ func (s *Store) CreateProject(p *model.Project) error {
 	if err != nil {
 		return fmt.Errorf("marshal project: %w", err)
 	}
-	return os.WriteFile(filepath.Join(dir, "project.yaml"), data, 0644)
+	return s.atomicWriteFile(filepath.Join(dir, "project.yaml"), data)
 }
 
 // ListProjects returns all projects found under the projects/ directory.
@@ -156,7 +156,7 @@ func (s *Store) CreateNote(note *model.Note) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.noteFilePath(note.ProjectID, note.ID), data, 0644)
+	return s.atomicWriteFile(s.noteFilePath(note.ProjectID, note.ID), data)
 }
 
 // GetNote reads a single note by project and note ID.
@@ -180,7 +180,7 @@ func (s *Store) UpdateNote(note *model.Note) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("note %s not found", note.ID)
 	}
-	return os.WriteFile(path, data, 0644)
+	return s.atomicWriteFile(path, data)
 }
 
 // DeleteNote moves a note file to the trash directory instead of permanently removing it.
@@ -256,6 +256,36 @@ func (s *Store) ListNotesPartial(projectID string) ([]*model.Note, []NoteError) 
 	return notes, noteErrors
 }
 
+// MoveNote moves a note from one project to another.
+// Pass empty string for global project scope.
+func (s *Store) MoveNote(noteID, fromProject, toProject string) error {
+	note, err := s.GetNote(fromProject, noteID)
+	if err != nil {
+		return fmt.Errorf("source note %s not found in project %q: %w", noteID, fromProject, err)
+	}
+
+	note.ProjectID = toProject
+	note.Metadata.UpdatedAt = time.Now()
+
+	destDir := s.notesDir(toProject)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("create destination notes dir: %w", err)
+	}
+
+	data, err := s.marshalNote(note)
+	if err != nil {
+		return err
+	}
+
+	destPath := s.noteFilePath(toProject, noteID)
+	if err := s.atomicWriteFile(destPath, data); err != nil {
+		return err
+	}
+
+	srcPath := s.noteFilePath(fromProject, noteID)
+	return os.Remove(srcPath)
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -295,6 +325,22 @@ func (s *Store) marshalNote(note *model.Note) ([]byte, error) {
 	buf.WriteString(note.Content)
 
 	return []byte(buf.String()), nil
+}
+
+// atomicWriteFile writes data to a temp file then renames it to the target path.
+// If the write or rename fails, the temp file is cleaned up and no partial data
+// is left at the target path.
+func (s *Store) atomicWriteFile(path string, data []byte) error {
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("write failed: %v (no changes made, safe to retry)", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("write failed: %v (no changes made, safe to retry)", err)
+	}
+	return nil
 }
 
 // unmarshalNote parses Markdown with YAML frontmatter into a Note.

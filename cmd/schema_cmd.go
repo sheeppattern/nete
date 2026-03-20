@@ -167,8 +167,11 @@ func printSchemaDetailMD(r *SchemaResource) {
 var schemaCmd = &cobra.Command{
 	Use:   "schema [resource]",
 	Short: "Show schema information for resources",
-	Long:  "Display available resources and their field definitions. Without arguments, lists all resources. With a resource name, shows detailed field schema.",
-	Args:  cobra.MaximumNArgs(1),
+	Long: "Display available resources and their field definitions. Without arguments, lists all resources. With a resource name, shows detailed field schema.",
+	Example: `  zk schema
+  zk schema note
+  zk schema relation-types`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		registry := buildSchemaRegistry()
 		f := getFormatter()

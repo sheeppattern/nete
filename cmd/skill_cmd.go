@@ -19,7 +19,9 @@ var skillCmd = &cobra.Command{
 var skillGenerateCmd = &cobra.Command{
 	Use:   "generate",
 	Short: "Generate skill files for Claude Code integration",
-	RunE:  runSkillGenerate,
+	Example: `  zk skill generate
+  zk skill generate --output /custom/path`,
+	RunE: runSkillGenerate,
 }
 
 func init() {
