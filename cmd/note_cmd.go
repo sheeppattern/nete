@@ -40,6 +40,7 @@ var noteCreateCmd = &cobra.Command{
 		templateName, _ := cmd.Flags().GetString("template")
 		layerFlag, _ := cmd.Flags().GetString("layer")
 		summary, _ := cmd.Flags().GetString("summary")
+		authorFlag, _ := cmd.Flags().GetString("author")
 
 		// Validate layer flag.
 		if layerFlag != model.LayerConcrete && layerFlag != model.LayerAbstract {
@@ -112,6 +113,18 @@ var noteCreateCmd = &cobra.Command{
 			}
 
 			s := store.NewStore(storePath)
+
+			// Resolve author: --author flag > config default_author > "user".
+			tmplAuthor := authorFlag
+			if tmplAuthor == "" {
+				if cfg, err := s.LoadConfig(); err == nil && cfg.DefaultAuthor != "" {
+					tmplAuthor = cfg.DefaultAuthor
+				} else {
+					tmplAuthor = "user"
+				}
+			}
+			note.Metadata.Author = tmplAuthor
+
 			if err := s.CreateNote(note); err != nil {
 				return fmt.Errorf("create note: %w", err)
 			}
@@ -131,6 +144,18 @@ var noteCreateCmd = &cobra.Command{
 		}
 
 		s := store.NewStore(storePath)
+
+		// Resolve author: --author flag > config default_author > "user".
+		author := authorFlag
+		if author == "" {
+			if cfg, err := s.LoadConfig(); err == nil && cfg.DefaultAuthor != "" {
+				author = cfg.DefaultAuthor
+			} else {
+				author = "user"
+			}
+		}
+		note.Metadata.Author = author
+
 		if err := s.CreateNote(note); err != nil {
 			return fmt.Errorf("create note: %w", err)
 		}
@@ -217,6 +242,9 @@ var noteUpdateCmd = &cobra.Command{
 		if cmd.Flags().Changed("summary") {
 			note.Metadata.Summary, _ = cmd.Flags().GetString("summary")
 		}
+		if cmd.Flags().Changed("author") {
+			note.Metadata.Author, _ = cmd.Flags().GetString("author")
+		}
 
 		if err := s.UpdateNote(note); err != nil {
 			return fmt.Errorf("update note: %w", err)
@@ -298,6 +326,7 @@ func init() {
 	noteCreateCmd.Flags().String("template", "", "template name (loads from {store}/templates/{name}.yaml)")
 	noteCreateCmd.Flags().String("layer", model.LayerConcrete, "note layer (concrete, abstract)")
 	noteCreateCmd.Flags().String("summary", "", "brief summary for quick scanning")
+	noteCreateCmd.Flags().String("author", "", "note author (e.g., claude, gemini, human)")
 	_ = noteCreateCmd.MarkFlagRequired("title")
 
 	// noteUpdateCmd flags
@@ -306,6 +335,7 @@ func init() {
 	noteUpdateCmd.Flags().StringSlice("tags", nil, "new tags")
 	noteUpdateCmd.Flags().String("status", "", "new status (active, archived)")
 	noteUpdateCmd.Flags().String("summary", "", "brief summary for quick scanning")
+	noteUpdateCmd.Flags().String("author", "", "note author (e.g., claude, gemini, human)")
 
 	// noteListCmd flags
 	noteListCmd.Flags().String("layer", "", "filter by layer (concrete, abstract)")
