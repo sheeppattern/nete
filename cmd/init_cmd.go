@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/sheeppattern/zk/internal/store"
@@ -25,13 +24,9 @@ var initCmd = &cobra.Command{
 
 		statusf("initialized zk store at %s", storePath)
 
-		// Install default skill files (non-fatal on failure).
-		home, err := os.UserHomeDir()
-		if err == nil {
-			defaultSkillDir := filepath.Join(home, ".claude", "skills", "zk")
-			if err := WriteSkillFiles(defaultSkillDir); err != nil {
-				fmt.Fprintln(os.Stderr, "warning: failed to write skill files:", err)
-			}
+		// Install global agent skill files (non-fatal on failure).
+		if err := WriteGlobalAgentFiles(); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: failed to write agent skill files:", err)
 		}
 
 		return nil
