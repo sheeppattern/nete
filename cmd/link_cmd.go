@@ -96,28 +96,37 @@ var linkAddCmd = &cobra.Command{
 			return nil
 		}
 
-		// Add forward link on source note.
+		// Modify both notes in memory before saving either.
 		sourceNote.Links = append(sourceNote.Links, model.Link{
 			TargetID:     targetID,
 			RelationType: relType,
 			Weight:       weight,
 		})
-		if err := s.UpdateNote(sourceNote); err != nil {
-			return fmt.Errorf("save source note: %w", err)
-		}
 
-		// Duplicate link prevention: check before adding reverse link.
-		if hasLink(targetNote.Links, sourceID, relType) {
-			statusf("reverse link %s → %s (type: %s) already exists, skipping reverse", targetID, sourceID, relType)
-		} else {
-			// Add reverse link on target note.
+		addedReverse := false
+		if !hasLink(targetNote.Links, sourceID, relType) {
 			targetNote.Links = append(targetNote.Links, model.Link{
 				TargetID:     sourceID,
 				RelationType: relType,
 				Weight:       weight,
 			})
+			addedReverse = true
+		} else {
+			statusf("reverse link %s → %s (type: %s) already exists, skipping reverse", targetID, sourceID, relType)
+		}
+
+		// Save source note.
+		if err := s.UpdateNote(sourceNote); err != nil {
+			return fmt.Errorf("save source note: %w", err)
+		}
+		// Save target note; rollback source on failure.
+		if addedReverse {
 			if err := s.UpdateNote(targetNote); err != nil {
-				return fmt.Errorf("save target note: %w", err)
+				sourceNote.Links = sourceNote.Links[:len(sourceNote.Links)-1]
+				if rbErr := s.UpdateNote(sourceNote); rbErr != nil {
+					return fmt.Errorf("save target failed AND rollback failed: %w (rollback: %v)", err, rbErr)
+				}
+				return fmt.Errorf("save target note (source rolled back): %w", err)
 			}
 		}
 
@@ -135,11 +144,18 @@ var linkAddCmd = &cobra.Command{
 var linkRemoveCmd = &cobra.Command{
 	Use:   "remove <sourceID> <targetID>",
 	Short: "Remove a bidirectional link between two notes",
-	Example: `  zk link remove N-AAAAAA N-BBBBBB --project P-XXXXXX`,
-	Args:  cobra.ExactArgs(2),
+	Example: `  zk link remove N-AAAAAA N-BBBBBB --project P-XXXXXX
+  zk link remove N-AAAAAA N-BBBBBB --project P-1 --target-project P-2
+  zk link remove N-AAAAAA N-BBBBBB --type supports --project P-XXXXXX`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sourceID := args[0]
 		targetID := args[1]
+		targetProject, _ := cmd.Flags().GetString("target-project")
+		relType, _ := cmd.Flags().GetString("type")
+		if targetProject == "" {
+			targetProject = flagProject
+		}
 
 		storePath := getStorePath(cmd)
 		s := store.NewStore(storePath)
@@ -149,17 +165,17 @@ var linkRemoveCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("load source note: %w", err)
 		}
-		sourceNote.Links = removeLink(sourceNote.Links, targetID)
+		sourceNote.Links = removeLinkFiltered(sourceNote.Links, targetID, relType)
 		if err := s.UpdateNote(sourceNote); err != nil {
 			return fmt.Errorf("save source note: %w", err)
 		}
 
 		// Remove reverse link from target note.
-		targetNote, err := s.GetNote(flagProject, targetID)
+		targetNote, err := s.GetNote(targetProject, targetID)
 		if err != nil {
 			return fmt.Errorf("load target note: %w", err)
 		}
-		targetNote.Links = removeLink(targetNote.Links, sourceID)
+		targetNote.Links = removeLinkFiltered(targetNote.Links, sourceID, relType)
 		if err := s.UpdateNote(targetNote); err != nil {
 			return fmt.Errorf("save target note: %w", err)
 		}
@@ -317,6 +333,34 @@ var linkListCmd = &cobra.Command{
 }
 
 // linkListBFS performs a breadth-first traversal of outgoing links up to the given depth.
+// getNoteAcrossProjects attempts to load a note from the given project, then
+// falls back to other projects and global scope.
+func getNoteAcrossProjects(s *store.Store, primaryProject, noteID string) (*model.Note, error) {
+	note, err := s.GetNote(primaryProject, noteID)
+	if err == nil {
+		return note, nil
+	}
+	projects, pErr := s.ListProjects()
+	if pErr == nil {
+		for _, p := range projects {
+			if p.ID == primaryProject {
+				continue
+			}
+			note, err = s.GetNote(p.ID, noteID)
+			if err == nil {
+				return note, nil
+			}
+		}
+	}
+	if primaryProject != "" {
+		note, err = s.GetNote("", noteID)
+		if err == nil {
+			return note, nil
+		}
+	}
+	return nil, fmt.Errorf("note %s not found in any project", noteID)
+}
+
 func linkListBFS(s *store.Store, f *output.Formatter, noteID, typeFilter string, sortWeight bool, maxDepth int) error {
 	visited := map[string]bool{noteID: true}
 	queue := []string{noteID}
@@ -329,7 +373,7 @@ func linkListBFS(s *store.Store, f *output.Formatter, noteID, typeFilter string,
 			note, ok := cache[id]
 			if !ok {
 				var err error
-				note, err = s.GetNote(flagProject, id)
+				note, err = getNoteAcrossProjects(s, flagProject, id)
 				if err != nil {
 					continue // skip notes that can't be loaded
 				}
@@ -399,13 +443,15 @@ func filterIncomingByType(links []IncomingLink, relType string) []IncomingLink {
 	return filtered
 }
 
-// removeLink filters out all links whose TargetID matches the given id.
-func removeLink(links []model.Link, targetID string) []model.Link {
+// removeLinkFiltered filters out links matching targetID and optionally relType.
+// If relType is empty, all links to targetID are removed.
+func removeLinkFiltered(links []model.Link, targetID, relType string) []model.Link {
 	filtered := make([]model.Link, 0, len(links))
 	for _, l := range links {
-		if l.TargetID != targetID {
-			filtered = append(filtered, l)
+		if l.TargetID == targetID && (relType == "" || strings.EqualFold(l.RelationType, relType)) {
+			continue
 		}
+		filtered = append(filtered, l)
 	}
 	return filtered
 }
@@ -475,6 +521,9 @@ func init() {
 	linkAddCmd.Flags().String("type", "related", "relation type (e.g. related, supports, contradicts, extends, causes, example-of)")
 	linkAddCmd.Flags().Float64("weight", 0.5, "link weight between 0.0 and 1.0")
 	linkAddCmd.Flags().String("target-project", "", "project of the target note (for cross-project links)")
+
+	linkRemoveCmd.Flags().String("target-project", "", "project of the target note (for cross-project links)")
+	linkRemoveCmd.Flags().String("type", "", "remove only links of this relation type (default: all types)")
 
 	linkListCmd.Flags().String("type", "", "filter links by relation type")
 	linkListCmd.Flags().Bool("sort-weight", false, "sort links by weight descending")

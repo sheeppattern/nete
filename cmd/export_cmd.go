@@ -20,6 +20,7 @@ type NoteExport struct {
 	ID        string         `json:"id"                    yaml:"id"`
 	Title     string         `json:"title"                 yaml:"title"`
 	Content   string         `json:"content"               yaml:"content"`
+	Layer     string         `json:"layer,omitempty"        yaml:"layer,omitempty"`
 	Tags      []string       `json:"tags"                  yaml:"tags"`
 	Links     []model.Link   `json:"links"                 yaml:"links"`
 	Metadata  model.Metadata `json:"metadata"              yaml:"metadata"`
@@ -39,6 +40,7 @@ func noteToExport(n *model.Note) *NoteExport {
 		ID:        n.ID,
 		Title:     n.Title,
 		Content:   n.Content,
+		Layer:     n.Layer,
 		Tags:      n.Tags,
 		Links:     n.Links,
 		Metadata:  n.Metadata,
@@ -51,6 +53,7 @@ func exportToNote(e *NoteExport) *model.Note {
 		ID:        e.ID,
 		Title:     e.Title,
 		Content:   e.Content,
+		Layer:     e.Layer,
 		Tags:      e.Tags,
 		Links:     e.Links,
 		Metadata:  e.Metadata,

@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -136,6 +139,25 @@ var updateCmd = &cobra.Command{
 		}
 		tmpFile.Close()
 
+		// Verify integrity if checksums file is available in release.
+		if checksumURL := findChecksumAssetURL(release.Assets); checksumURL != "" {
+			expectedHash, err := fetchExpectedHash(checksumURL, assetName)
+			if err != nil {
+				statusf("warning: checksum verification skipped: %v", err)
+			} else {
+				actualHash, err := sha256File(tmpPath)
+				if err != nil {
+					return fmt.Errorf("compute file hash: %w", err)
+				}
+				if actualHash != expectedHash {
+					return fmt.Errorf("integrity check failed: expected sha256 %s, got %s", expectedHash, actualHash)
+				}
+				statusf("integrity verified (sha256: %s...)", actualHash[:16])
+			}
+		} else {
+			statusf("warning: no checksums file in release, skipping integrity verification")
+		}
+
 		// Replace current binary.
 		execPath, err := os.Executable()
 		if err != nil {
@@ -264,6 +286,54 @@ func fetchLatestRelease() (*ghRelease, error) {
 		return nil, fmt.Errorf("parse release: %w", err)
 	}
 	return &release, nil
+}
+
+// findChecksumAssetURL looks for a checksums file in release assets.
+func findChecksumAssetURL(assets []ghAsset) string {
+	for _, a := range assets {
+		name := strings.ToLower(a.Name)
+		if strings.Contains(name, "checksum") || strings.Contains(name, "sha256") {
+			return a.BrowserDownloadURL
+		}
+	}
+	return ""
+}
+
+// fetchExpectedHash downloads a checksums file and extracts the hash for the given asset name.
+func fetchExpectedHash(checksumURL, assetName string) (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(checksumURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Format: "<hash>  <filename>" or "<hash> <filename>"
+		parts := strings.Fields(line)
+		if len(parts) >= 2 && strings.Contains(strings.ToLower(parts[1]), strings.ToLower(assetName)) {
+			return parts[0], nil
+		}
+	}
+	return "", fmt.Errorf("no checksum found for %s", assetName)
+}
+
+// sha256File computes the SHA-256 hash of a file.
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // copyFile copies src to dst.

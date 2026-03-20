@@ -949,5 +949,156 @@ func TestCLIFormatMDConsistency(t *testing.T) {
 	}
 }
 
+func TestLinkRemoveCrossProject(t *testing.T) {
+	storeDir := initStore(t)
+	p1 := createProject(t, storeDir, "proj1", "first")
+	p2 := createProject(t, storeDir, "proj2", "second")
+	n1 := createNote(t, storeDir, p1, "note1", "content1", nil)
+	n2 := createNote(t, storeDir, p2, "note2", "content2", nil)
+
+	mustRunZK(t, storeDir, "link", "add", n1, n2, "--project", p1, "--target-project", p2)
+
+	// Remove the cross-project link.
+	mustRunZK(t, storeDir, "link", "remove", n1, n2, "--project", p1, "--target-project", p2)
+
+	// Verify link is gone.
+	stdout := mustRunZK(t, storeDir, "link", "list", n1, "--project", p1, "--format", "json")
+	if strings.Contains(stdout, n2) {
+		t.Errorf("link to %s should be removed, got: %s", n2, stdout)
+	}
+}
+
+func TestLinkRemoveByType(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "proj", "test")
+	n1 := createNote(t, storeDir, projID, "note1", "c1", nil)
+	n2 := createNote(t, storeDir, projID, "note2", "c2", nil)
+
+	mustRunZK(t, storeDir, "link", "add", n1, n2, "--type", "supports", "--project", projID)
+	mustRunZK(t, storeDir, "link", "add", n1, n2, "--type", "extends", "--project", projID)
+
+	// Remove only the supports link.
+	mustRunZK(t, storeDir, "link", "remove", n1, n2, "--type", "supports", "--project", projID)
+
+	// extends link should still exist.
+	stdout := mustRunZK(t, storeDir, "link", "list", n1, "--project", projID, "--format", "json")
+	if !strings.Contains(stdout, "extends") {
+		t.Errorf("extends link should remain, got: %s", stdout)
+	}
+	if strings.Contains(stdout, "supports") {
+		t.Errorf("supports link should be removed, got: %s", stdout)
+	}
+}
+
+func TestQuicknoteKoreanTitle(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "proj", "test")
+
+	// 60 Korean characters — should be truncated to 50 runes without breaking UTF-8.
+	text := "가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차"
+	stdout := mustRunZK(t, storeDir, "quicknote", text, "--project", projID, "--format", "json")
+
+	var note map[string]interface{}
+	parseJSON(t, stdout, &note)
+	title, ok := note["title"].(string)
+	if !ok {
+		t.Fatalf("title not found in response")
+	}
+
+	// Title should be valid UTF-8 and at most 50 runes.
+	runeCount := 0
+	for range title {
+		runeCount++
+	}
+	if runeCount > 50 {
+		t.Errorf("title has %d runes, want <= 50", runeCount)
+	}
+}
+
+func TestExportImportPreservesLayer(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "proj", "test")
+
+	// Create an abstract note.
+	stdout := mustRunZK(t, storeDir, "note", "create",
+		"--title", "abstract note",
+		"--content", "insight body",
+		"--layer", "abstract",
+		"--project", projID, "--format", "json")
+	var created map[string]interface{}
+	parseJSON(t, stdout, &created)
+	noteID := created["id"].(string)
+
+	// Export.
+	tmpFile := filepath.Join(t.TempDir(), "export.yaml")
+	mustRunZK(t, storeDir, "export", "--project", projID, "--output", tmpFile, "--format", "yaml")
+
+	// Delete original.
+	mustRunZK(t, storeDir, "note", "delete", noteID, "--force", "--project", projID)
+
+	// Import.
+	mustRunZK(t, storeDir, "import", "--file", tmpFile, "--project", projID, "--conflict", "overwrite")
+
+	// Verify layer preserved.
+	stdout = mustRunZK(t, storeDir, "note", "get", noteID, "--project", projID, "--format", "json")
+	var imported map[string]interface{}
+	parseJSON(t, stdout, &imported)
+	layer, _ := imported["layer"].(string)
+	if layer != "abstract" {
+		t.Errorf("layer = %q, want %q", layer, "abstract")
+	}
+}
+
+func TestDeleteNoteCrossProjectBacklink(t *testing.T) {
+	storeDir := initStore(t)
+	p1 := createProject(t, storeDir, "proj1", "first")
+	p2 := createProject(t, storeDir, "proj2", "second")
+	n1 := createNote(t, storeDir, p1, "note1", "c1", nil)
+	n2 := createNote(t, storeDir, p2, "note2", "c2", nil)
+
+	mustRunZK(t, storeDir, "link", "add", n1, n2, "--project", p1, "--target-project", p2)
+
+	// Try deleting n2 without --force — should fail due to cross-project backlink.
+	_, _, err := runZK(t, storeDir, "note", "delete", n2, "--project", p2)
+	if err == nil {
+		t.Errorf("expected delete to fail due to cross-project backlink")
+	}
+}
+
+func TestDiagnoseCrossProjectLink(t *testing.T) {
+	storeDir := initStore(t)
+	p1 := createProject(t, storeDir, "proj1", "first")
+	p2 := createProject(t, storeDir, "proj2", "second")
+	n1 := createNote(t, storeDir, p1, "note1", "c1", nil)
+	n2 := createNote(t, storeDir, p2, "note2", "c2", nil)
+
+	mustRunZK(t, storeDir, "link", "add", n1, n2, "--project", p1, "--target-project", p2)
+
+	// Diagnose should NOT report the cross-project link as broken.
+	stdout := mustRunZK(t, storeDir, "diagnose", "--project", p1, "--format", "json")
+	if strings.Contains(stdout, "broken link") {
+		t.Errorf("diagnose should not report cross-project link as broken:\n%s", stdout)
+	}
+}
+
+func TestTagReplaceDuplicates(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "proj", "test")
+	noteID := createNote(t, storeDir, projID, "note", "content", []string{"draft", "draft", "review"})
+
+	mustRunZK(t, storeDir, "tag", "replace", "draft", "final", "--project", projID)
+
+	stdout := mustRunZK(t, storeDir, "note", "get", noteID, "--project", projID, "--format", "json")
+	// Should have "final" once and no "draft".
+	draftCount := strings.Count(stdout, `"draft"`)
+	if draftCount > 0 {
+		t.Errorf("draft tag should be fully replaced, found %d occurrences", draftCount)
+	}
+	finalCount := strings.Count(stdout, `"final"`)
+	if finalCount != 1 {
+		t.Errorf("final tag should appear exactly once, found %d", finalCount)
+	}
+}
+
 // Prevent unused import warning for fmt.
 var _ = fmt.Sprintf

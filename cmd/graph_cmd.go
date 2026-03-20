@@ -119,7 +119,7 @@ func runGraph(cmd *cobra.Command, args []string) error {
 		for _, n := range sortedNotes {
 			title := truncateTitle(n.Title, 30)
 			label := fmt.Sprintf("%s (%s)", title, n.Layer)
-			nodeID := strings.ReplaceAll(n.ID, "-", "-")
+			nodeID := n.ID
 			if n.Layer == model.LayerAbstract {
 				b.WriteString(fmt.Sprintf("  %s{{\"%s\"}}\n", nodeID, label))
 			} else {
@@ -128,14 +128,14 @@ func runGraph(cmd *cobra.Command, args []string) error {
 		}
 		// Edges.
 		for _, e := range edges {
-			fromID := strings.ReplaceAll(e.From, "-", "-")
-			toID := strings.ReplaceAll(e.To, "-", "-")
+			fromID := e.From
+			toID := e.To
 			b.WriteString(fmt.Sprintf("  %s -->|\"%s (%.1f)\"| %s\n", fromID, e.Relation, e.Weight, toID))
 		}
 		// Style abstract nodes.
 		for _, n := range sortedNotes {
 			if n.Layer == model.LayerAbstract {
-				nodeID := strings.ReplaceAll(n.ID, "-", "-")
+				nodeID := n.ID
 				b.WriteString(fmt.Sprintf("  style %s fill:#fde8e8\n", nodeID))
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/sheeppattern/zk/internal/model"
@@ -255,11 +256,11 @@ func buildReflectReport(notes []*model.Note) *ReflectReport {
 
 	// 4. Detect bloated notes: concrete notes with content > 1000 characters.
 	for _, n := range concreteNotes {
-		if len(n.Content) > 1000 {
+		if utf8.RuneCountInString(n.Content) > 1000 {
 			report.Insights = append(report.Insights, Insight{
 				Type:           "bloated_note",
 				SourceNotes:    []string{n.ID},
-				Suggestion:     fmt.Sprintf("%s(%s)이 %d자로 비대합니다 — 가설/검증/결론 노트로 분리를 고려하세요", n.ID, n.Title, len(n.Content)),
+				Suggestion:     fmt.Sprintf("%s(%s)이 %d자로 비대합니다 — 가설/검증/결론 노트로 분리를 고려하세요", n.ID, n.Title, utf8.RuneCountInString(n.Content)),
 				SuggestedTitle: "",
 			})
 		}

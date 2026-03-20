@@ -271,8 +271,22 @@ var noteDeleteCmd = &cobra.Command{
 			if _, err := s.GetNote(flagProject, noteID); err != nil {
 				return fmt.Errorf("delete note: %w", err)
 			}
-			// Scan for backlinks pointing to this note.
+			// Scan for backlinks pointing to this note across all projects.
 			allNotes, _ := s.ListNotesPartial(flagProject)
+			projects, projErr := s.ListProjects()
+			if projErr == nil {
+				for _, p := range projects {
+					if p.ID == flagProject {
+						continue
+					}
+					pNotes, _ := s.ListNotesPartial(p.ID)
+					allNotes = append(allNotes, pNotes...)
+				}
+			}
+			if flagProject != "" {
+				gNotes, _ := s.ListNotesPartial("")
+				allNotes = append(allNotes, gNotes...)
+			}
 			var backlinkCount int
 			for _, n := range allNotes {
 				for _, link := range n.Links {
