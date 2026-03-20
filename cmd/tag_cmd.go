@@ -103,26 +103,30 @@ var tagReplaceCmd = &cobra.Command{
 
 		affected := 0
 		for _, note := range notes {
+			// Build new tag list: replace all occurrences of oldTag with newTag (once).
+			var newTags []string
 			replaced := false
-			hasNew := false
+			addedNew := false
 			for _, t := range note.Tags {
-				if t == newTag {
-					hasNew = true
-				}
-			}
-			for i, t := range note.Tags {
 				if t == oldTag {
-					if hasNew {
-						// Remove the old tag since newTag already exists
-						note.Tags = append(note.Tags[:i], note.Tags[i+1:]...)
-					} else {
-						note.Tags[i] = newTag
-					}
 					replaced = true
-					break
+					if !addedNew {
+						newTags = append(newTags, newTag)
+						addedNew = true
+					}
+					// skip duplicate oldTags
+				} else if t == newTag {
+					if !addedNew {
+						newTags = append(newTags, t)
+						addedNew = true
+					}
+					// skip duplicate newTags if oldTag was already replaced
+				} else {
+					newTags = append(newTags, t)
 				}
 			}
 			if replaced {
+				note.Tags = newTags
 				if err := s.UpdateNote(note); err != nil {
 					return fmt.Errorf("update note %s: %w", note.ID, err)
 				}

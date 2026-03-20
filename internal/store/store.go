@@ -84,6 +84,9 @@ func (s *Store) SaveConfig(cfg *model.Config) error {
 
 // CreateProject persists a new project to disk.
 func (s *Store) CreateProject(p *model.Project) error {
+	if err := sanitizeID(p.ID); err != nil {
+		return err
+	}
 	dir := filepath.Join(s.rootPath, "projects", p.ID)
 	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0755); err != nil {
 		return fmt.Errorf("create project dirs: %w", err)
@@ -122,6 +125,9 @@ func (s *Store) ListProjects() ([]*model.Project, error) {
 
 // GetProject reads a single project by its ID.
 func (s *Store) GetProject(id string) (*model.Project, error) {
+	if err := sanitizeID(id); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(filepath.Join(s.rootPath, "projects", id, "project.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("read project %s: %w", id, err)
@@ -135,6 +141,9 @@ func (s *Store) GetProject(id string) (*model.Project, error) {
 
 // DeleteProject removes a project directory and all its notes.
 func (s *Store) DeleteProject(id string) error {
+	if err := sanitizeID(id); err != nil {
+		return err
+	}
 	dir := filepath.Join(s.rootPath, "projects", id)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return fmt.Errorf("project %s not found", id)
@@ -148,6 +157,14 @@ func (s *Store) DeleteProject(id string) error {
 
 // CreateNote writes a new note to disk in the appropriate directory.
 func (s *Store) CreateNote(note *model.Note) error {
+	if err := sanitizeID(note.ID); err != nil {
+		return err
+	}
+	if note.ProjectID != "" {
+		if err := sanitizeID(note.ProjectID); err != nil {
+			return err
+		}
+	}
 	dir := s.notesDir(note.ProjectID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create notes dir: %w", err)
@@ -162,6 +179,14 @@ func (s *Store) CreateNote(note *model.Note) error {
 // GetNote reads a single note by project and note ID.
 // Pass an empty projectID for global notes.
 func (s *Store) GetNote(projectID, noteID string) (*model.Note, error) {
+	if err := sanitizeID(noteID); err != nil {
+		return nil, err
+	}
+	if projectID != "" {
+		if err := sanitizeID(projectID); err != nil {
+			return nil, err
+		}
+	}
 	data, err := os.ReadFile(s.noteFilePath(projectID, noteID))
 	if err != nil {
 		return nil, fmt.Errorf("read note %s: %w", noteID, err)
@@ -185,6 +210,14 @@ func (s *Store) UpdateNote(note *model.Note) error {
 
 // DeleteNote moves a note file to the trash directory instead of permanently removing it.
 func (s *Store) DeleteNote(projectID, noteID string) error {
+	if err := sanitizeID(noteID); err != nil {
+		return err
+	}
+	if projectID != "" {
+		if err := sanitizeID(projectID); err != nil {
+			return err
+		}
+	}
 	path := s.noteFilePath(projectID, noteID)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("note %s not found", noteID)
@@ -259,6 +292,9 @@ func (s *Store) ListNotesPartial(projectID string) ([]*model.Note, []NoteError) 
 // MoveNote moves a note from one project to another.
 // Pass empty string for global project scope.
 func (s *Store) MoveNote(noteID, fromProject, toProject string) error {
+	if err := sanitizeID(noteID); err != nil {
+		return err
+	}
 	note, err := s.GetNote(fromProject, noteID)
 	if err != nil {
 		return fmt.Errorf("source note %s not found in project %q: %w", noteID, fromProject, err)
@@ -283,12 +319,24 @@ func (s *Store) MoveNote(noteID, fromProject, toProject string) error {
 	}
 
 	srcPath := s.noteFilePath(fromProject, noteID)
-	return os.Remove(srcPath)
+	if err := os.Remove(srcPath); err != nil {
+		os.Remove(destPath) // rollback: remove destination copy
+		return fmt.Errorf("move failed (rolled back): %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+// sanitizeID validates that an ID does not contain path traversal characters.
+func sanitizeID(id string) error {
+	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		return fmt.Errorf("invalid ID %q: contains path separator or traversal sequence", id)
+	}
+	return nil
+}
 
 // notesDir returns the notes directory for a project, or global if projectID is empty.
 func (s *Store) notesDir(projectID string) string {
@@ -332,11 +380,20 @@ func (s *Store) marshalNote(note *model.Note) ([]byte, error) {
 // If the write or rename fails, the temp file is cleaned up and no partial data
 // is left at the target path.
 func (s *Store) atomicWriteFile(path string, data []byte) error {
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, ".zk-tmp-*")
+	if err != nil {
+		return fmt.Errorf("write failed: %v (no changes made, safe to retry)", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("write failed: %v (no changes made, safe to retry)", err)
 	}
+	tmpFile.Close()
+
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("write failed: %v (no changes made, safe to retry)", err)
@@ -354,14 +411,32 @@ func (s *Store) unmarshalNote(data []byte) (*model.Note, error) {
 	}
 	content = content[4:] // skip "---\n"
 
-	// Find closing "---\n"
-	idx := strings.Index(content, "\n---\n")
-	if idx == -1 {
+	// Find closing delimiter by scanning lines: a line that is exactly "---".
+	var yamlPart, bodyPart string
+	rest := content
+	found := false
+	for {
+		nlIdx := strings.Index(rest, "\n")
+		if nlIdx == -1 {
+			// Last line without trailing newline.
+			if rest == "---" {
+				found = true
+				bodyPart = ""
+			}
+			break
+		}
+		line := rest[:nlIdx]
+		if line == "---" {
+			found = true
+			bodyPart = rest[nlIdx+1:]
+			break
+		}
+		yamlPart += line + "\n"
+		rest = rest[nlIdx+1:]
+	}
+	if !found {
 		return nil, fmt.Errorf("invalid note format: missing closing frontmatter delimiter")
 	}
-
-	yamlPart := content[:idx]
-	bodyPart := content[idx+5:] // skip "\n---\n"
 
 	var fm model.NoteFrontmatter
 	if err := yaml.Unmarshal([]byte(yamlPart), &fm); err != nil {

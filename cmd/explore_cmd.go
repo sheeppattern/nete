@@ -62,15 +62,30 @@ var exploreCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Load all notes and build noteMap.
+		// Load all notes across all projects and build noteMap.
+		noteMap := make(map[string]*model.Note)
 		allNotes, err := s.ListNotes(flagProject)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: listing notes: %v\n", err)
-			os.Exit(1)
+		if err == nil {
+			for _, n := range allNotes {
+				noteMap[n.ID] = n
+			}
 		}
-		noteMap := make(map[string]*model.Note, len(allNotes))
-		for _, n := range allNotes {
-			noteMap[n.ID] = n
+		// Include notes from other projects for cross-project traversal.
+		projects, _ := s.ListProjects()
+		for _, p := range projects {
+			if p.ID == flagProject {
+				continue
+			}
+			pNotes, _ := s.ListNotes(p.ID)
+			for _, n := range pNotes {
+				noteMap[n.ID] = n
+			}
+		}
+		if flagProject != "" {
+			gNotes, _ := s.ListNotes("")
+			for _, n := range gNotes {
+				noteMap[n.ID] = n
+			}
 		}
 
 		// Build Current node.

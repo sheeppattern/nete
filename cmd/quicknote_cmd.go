@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/sheeppattern/zk/internal/model"
@@ -20,12 +22,11 @@ var quicknoteCmd = &cobra.Command{
 		text := args[0]
 		authorFlag, _ := cmd.Flags().GetString("author")
 
-		// Derive title: truncate at 50 chars on word boundary.
+		// Derive title: truncate at 50 runes on word boundary.
 		title := text
-		if len(title) > 50 {
-			title = title[:50]
-			// Try to cut at last space for cleaner title.
-			if idx := lastSpaceIndex(title); idx > 20 {
+		if utf8.RuneCountInString(title) > 50 {
+			title = string([]rune(title)[:50])
+			if idx := strings.LastIndex(title, " "); idx > 20 {
 				title = title[:idx]
 			}
 		}
@@ -58,15 +59,6 @@ var quicknoteCmd = &cobra.Command{
 	},
 }
 
-// lastSpaceIndex returns the index of the last space in s, or -1 if none.
-func lastSpaceIndex(s string) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == ' ' {
-			return i
-		}
-	}
-	return -1
-}
 
 func init() {
 	quicknoteCmd.Flags().String("author", "", "note author (e.g., claude, gemini, human)")

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -236,5 +237,47 @@ func TestNewRelationTypesExtended(t *testing.T) {
 	}
 	if !IsValidRelationType(RelInvalidates) {
 		t.Fatalf("IsValidRelationType(%q) = false; want true", RelInvalidates)
+	}
+}
+
+func TestCustomRelationTypesConcurrency(t *testing.T) {
+	ResetCustomRelationTypes()
+	defer ResetCustomRelationTypes()
+
+	done := make(chan bool)
+	// Writer goroutine.
+	go func() {
+		for i := 0; i < 100; i++ {
+			RegisterRelationType(fmt.Sprintf("custom-%d", i))
+		}
+		done <- true
+	}()
+	// Reader goroutine.
+	go func() {
+		for i := 0; i < 100; i++ {
+			_ = ValidRelationTypes()
+			_ = IsValidRelationType("supports")
+		}
+		done <- true
+	}()
+	<-done
+	<-done
+}
+
+func TestValidRelationTypesNoBacking(t *testing.T) {
+	ResetCustomRelationTypes()
+	defer ResetCustomRelationTypes()
+
+	RegisterRelationType("test-type")
+
+	vrt := ValidRelationTypes()
+	originalLen := len(vrt)
+
+	// Appending to the returned slice should NOT affect internal state.
+	vrt = append(vrt, "injected")
+
+	vrt2 := ValidRelationTypes()
+	if len(vrt2) != originalLen {
+		t.Fatalf("ValidRelationTypes() length changed after caller append: got %d, want %d", len(vrt2), originalLen)
 	}
 }

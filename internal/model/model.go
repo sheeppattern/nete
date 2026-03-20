@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -151,10 +152,15 @@ func DefaultConfig() *Config {
 }
 
 // customRelationTypes holds user-registered relation types beyond the built-in set.
-var customRelationTypes []string
+var (
+	customRelationTypes   []string
+	customRelationTypesMu sync.RWMutex
+)
 
 // RegisterRelationType adds a custom relation type if it doesn't already exist.
 func RegisterRelationType(rt string) {
+	customRelationTypesMu.Lock()
+	defer customRelationTypesMu.Unlock()
 	for _, existing := range customRelationTypes {
 		if existing == rt {
 			return
@@ -165,6 +171,8 @@ func RegisterRelationType(rt string) {
 
 // CustomRelationTypes returns only the user-registered custom relation types.
 func CustomRelationTypes() []string {
+	customRelationTypesMu.RLock()
+	defer customRelationTypesMu.RUnlock()
 	result := make([]string, len(customRelationTypes))
 	copy(result, customRelationTypes)
 	return result
@@ -172,12 +180,23 @@ func CustomRelationTypes() []string {
 
 // LoadCustomRelationTypes replaces the custom relation types from a config slice.
 func LoadCustomRelationTypes(types []string) {
+	customRelationTypesMu.Lock()
+	defer customRelationTypesMu.Unlock()
 	customRelationTypes = make([]string, len(types))
 	copy(customRelationTypes, types)
 }
 
+// ResetCustomRelationTypes clears all custom relation types (for testing).
+func ResetCustomRelationTypes() {
+	customRelationTypesMu.Lock()
+	defer customRelationTypesMu.Unlock()
+	customRelationTypes = nil
+}
+
 // ValidRelationTypes returns all valid relation type constants (built-in + custom).
 func ValidRelationTypes() []string {
+	customRelationTypesMu.RLock()
+	defer customRelationTypesMu.RUnlock()
 	builtIn := []string{
 		RelRelated,
 		RelSupports,
@@ -190,7 +209,10 @@ func ValidRelationTypes() []string {
 		RelReplaces,
 		RelInvalidates,
 	}
-	return append(builtIn, customRelationTypes...)
+	result := make([]string, 0, len(builtIn)+len(customRelationTypes))
+	result = append(result, builtIn...)
+	result = append(result, customRelationTypes...)
+	return result
 }
 
 // IsValidRelationType checks whether the given relation type is valid (built-in or custom).

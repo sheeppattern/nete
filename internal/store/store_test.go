@@ -396,3 +396,90 @@ func TestNoteLayerDefault(t *testing.T) {
 		t.Fatalf("Layer = %q; want %q", got.Layer, "concrete")
 	}
 }
+
+func TestSanitizeID_PathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init() error: %v", err)
+	}
+
+	badIDs := []string{"../../etc/passwd", "../secret", "N-123/../../x", "N-123\\..\\x", ".."}
+	for _, id := range badIDs {
+		note := model.NewNote("test", "content", nil)
+		note.ID = id
+		if err := s.CreateNote(note); err == nil {
+			t.Errorf("CreateNote with ID %q should fail, but succeeded", id)
+		}
+
+		if _, err := s.GetNote("", id); err == nil {
+			t.Errorf("GetNote with ID %q should fail, but succeeded", id)
+		}
+
+		if err := s.DeleteNote("", id); err == nil {
+			t.Errorf("DeleteNote with ID %q should fail, but succeeded", id)
+		}
+	}
+
+	// Valid IDs should work.
+	note := model.NewNote("test", "content", nil)
+	if err := s.CreateNote(note); err != nil {
+		t.Fatalf("CreateNote with valid ID failed: %v", err)
+	}
+}
+
+func TestMoveNote_RollbackOnFail(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init() error: %v", err)
+	}
+
+	p := model.NewProject("source", "src project")
+	if err := s.CreateProject(p); err != nil {
+		t.Fatalf("CreateProject error: %v", err)
+	}
+
+	note := model.NewNote("test move", "content", nil)
+	note.ProjectID = p.ID
+	if err := s.CreateNote(note); err != nil {
+		t.Fatalf("CreateNote error: %v", err)
+	}
+
+	// Moving to a valid new project should work.
+	p2 := model.NewProject("dest", "dest project")
+	if err := s.CreateProject(p2); err != nil {
+		t.Fatalf("CreateProject error: %v", err)
+	}
+	if err := s.MoveNote(note.ID, p.ID, p2.ID); err != nil {
+		t.Fatalf("MoveNote error: %v", err)
+	}
+
+	// Note should be in dest, not source.
+	if _, err := s.GetNote(p2.ID, note.ID); err != nil {
+		t.Fatalf("note should be in dest project: %v", err)
+	}
+	if _, err := s.GetNote(p.ID, note.ID); err == nil {
+		t.Fatalf("note should NOT be in source project after move")
+	}
+}
+
+func TestAtomicWriteFile_TempCleanup(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init() error: %v", err)
+	}
+
+	// Create and verify a note (exercises atomicWriteFile).
+	note := model.NewNote("atomic test", "content", nil)
+	if err := s.CreateNote(note); err != nil {
+		t.Fatalf("CreateNote error: %v", err)
+	}
+
+	// No .zk-tmp-* files should remain.
+	matches, _ := filepath.Glob(filepath.Join(dir, "**", ".zk-tmp-*"))
+	if len(matches) > 0 {
+		t.Fatalf("stale temp files found: %v", matches)
+	}
+}

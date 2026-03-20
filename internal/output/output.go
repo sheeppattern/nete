@@ -17,6 +17,7 @@ type noteView struct {
 	ID        string         `json:"id"                    yaml:"id"`
 	Title     string         `json:"title"                 yaml:"title"`
 	Content   string         `json:"content"               yaml:"content"`
+	Layer     string         `json:"layer"                 yaml:"layer"`
 	Tags      []string       `json:"tags"                  yaml:"tags"`
 	Links     []model.Link   `json:"links"                 yaml:"links"`
 	Metadata  model.Metadata `json:"metadata"              yaml:"metadata"`
@@ -24,10 +25,15 @@ type noteView struct {
 }
 
 func toNoteView(n *model.Note) noteView {
+	layer := n.Layer
+	if layer == "" {
+		layer = "concrete"
+	}
 	return noteView{
 		ID:        n.ID,
 		Title:     n.Title,
 		Content:   n.Content,
+		Layer:     layer,
 		Tags:      n.Tags,
 		Links:     n.Links,
 		Metadata:  n.Metadata,

@@ -53,7 +53,29 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 
 	notes, noteErrors := s.ListNotesPartial(flagProject)
 
-	report := buildDiagnosticReport(notes)
+	// Build cross-project ID set for link validation.
+	allNoteIDs := make(map[string]bool)
+	for _, n := range notes {
+		allNoteIDs[n.ID] = true
+	}
+	projects, _ := s.ListProjects()
+	for _, p := range projects {
+		if p.ID == flagProject {
+			continue
+		}
+		pNotes, _ := s.ListNotesPartial(p.ID)
+		for _, n := range pNotes {
+			allNoteIDs[n.ID] = true
+		}
+	}
+	if flagProject != "" {
+		gNotes, _ := s.ListNotesPartial("")
+		for _, n := range gNotes {
+			allNoteIDs[n.ID] = true
+		}
+	}
+
+	report := buildDiagnosticReport(notes, allNoteIDs)
 
 	// Add corrupted file errors from partial listing.
 	for _, ne := range noteErrors {
@@ -82,14 +104,14 @@ func runDiagnose(cmd *cobra.Command, args []string) error {
 	}
 }
 
-func buildDiagnosticReport(notes []*model.Note) *DiagnosticReport {
+func buildDiagnosticReport(notes []*model.Note, allNoteIDs map[string]bool) *DiagnosticReport {
 	report := &DiagnosticReport{
 		Errors:   []DiagnosticItem{},
 		Warnings: []DiagnosticItem{},
 	}
 
-	// Build index of all note IDs for quick lookup.
-	noteIDs := make(map[string]int) // id -> count
+	// Build index of project note IDs for orphan detection.
+	noteIDs := make(map[string]int)
 	for _, n := range notes {
 		noteIDs[n.ID]++
 	}
@@ -106,8 +128,8 @@ func buildDiagnosticReport(notes []*model.Note) *DiagnosticReport {
 		for _, link := range n.Links {
 			hasIncoming[link.TargetID] = true
 
-			// Check broken links.
-			if _, exists := noteIDs[link.TargetID]; !exists {
+			// Check broken links (against all projects, not just current).
+			if !allNoteIDs[link.TargetID] {
 				report.Errors = append(report.Errors, DiagnosticItem{
 					Severity: "error",
 					NoteID:   n.ID,
