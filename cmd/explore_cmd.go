@@ -17,6 +17,7 @@ type ExploreNode struct {
 	Layer   string   `json:"layer" yaml:"layer"`
 	Tags    []string `json:"tags" yaml:"tags"`
 	Content string   `json:"content,omitempty" yaml:"content,omitempty"`
+	Summary string   `json:"summary,omitempty" yaml:"summary,omitempty"`
 }
 
 // ExploreEdge represents a directional link in the exploration graph.
@@ -24,6 +25,7 @@ type ExploreEdge struct {
 	NoteID       string  `json:"note_id" yaml:"note_id"`
 	NoteTitle    string  `json:"note_title" yaml:"note_title"`
 	NoteLayer    string  `json:"note_layer" yaml:"note_layer"`
+	NoteSummary  string  `json:"note_summary,omitempty" yaml:"note_summary,omitempty"`
 	RelationType string  `json:"relation_type" yaml:"relation_type"`
 	Weight       float64 `json:"weight" yaml:"weight"`
 	Direction    string  `json:"direction" yaml:"direction"`
@@ -87,6 +89,7 @@ var exploreCmd = &cobra.Command{
 			if target, ok := noteMap[link.TargetID]; ok {
 				edge.NoteTitle = target.Title
 				edge.NoteLayer = target.Layer
+				edge.NoteSummary = target.Metadata.Summary
 			}
 			result.Outgoing = append(result.Outgoing, edge)
 		}
@@ -103,6 +106,7 @@ var exploreCmd = &cobra.Command{
 						NoteID:       n.ID,
 						NoteTitle:    n.Title,
 						NoteLayer:    n.Layer,
+						NoteSummary:  n.Metadata.Summary,
 						RelationType: link.RelationType,
 						Weight:       link.Weight,
 						Direction:    "incoming",
@@ -139,10 +143,11 @@ func makeExploreNode(n *model.Note, includeContent bool) ExploreNode {
 		tags = []string{}
 	}
 	node := ExploreNode{
-		ID:    n.ID,
-		Title: n.Title,
-		Layer: n.Layer,
-		Tags:  tags,
+		ID:      n.ID,
+		Title:   n.Title,
+		Layer:   n.Layer,
+		Tags:    tags,
+		Summary: n.Metadata.Summary,
 	}
 	if includeContent {
 		node.Content = n.Content
@@ -241,8 +246,13 @@ func printExploreMD(result ExploreResult, projectID string) error {
 		fmt.Fprintln(&b, "_No outgoing links._")
 	} else {
 		for _, e := range result.Outgoing {
-			fmt.Fprintf(&b, "- %s → **%s** (%s) [%s, weight: %.2f]\n",
-				result.Current.ID, e.NoteTitle, e.NoteID, e.RelationType, e.Weight)
+			if e.NoteSummary != "" {
+				fmt.Fprintf(&b, "- %s → **%s** (%s) — %s [%s, weight: %.2f]\n",
+					result.Current.ID, e.NoteTitle, e.NoteID, e.NoteSummary, e.RelationType, e.Weight)
+			} else {
+				fmt.Fprintf(&b, "- %s → **%s** (%s) [%s, weight: %.2f]\n",
+					result.Current.ID, e.NoteTitle, e.NoteID, e.RelationType, e.Weight)
+			}
 		}
 	}
 
@@ -251,8 +261,13 @@ func printExploreMD(result ExploreResult, projectID string) error {
 		fmt.Fprintln(&b, "_No incoming links._")
 	} else {
 		for _, e := range result.Incoming {
-			fmt.Fprintf(&b, "- **%s** (%s) → %s [%s, weight: %.2f]\n",
-				e.NoteTitle, e.NoteID, result.Current.ID, e.RelationType, e.Weight)
+			if e.NoteSummary != "" {
+				fmt.Fprintf(&b, "- **%s** (%s) — %s → %s [%s, weight: %.2f]\n",
+					e.NoteTitle, e.NoteID, e.NoteSummary, result.Current.ID, e.RelationType, e.Weight)
+			} else {
+				fmt.Fprintf(&b, "- **%s** (%s) → %s [%s, weight: %.2f]\n",
+					e.NoteTitle, e.NoteID, result.Current.ID, e.RelationType, e.Weight)
+			}
 		}
 	}
 

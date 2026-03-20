@@ -72,6 +72,7 @@ type Metadata struct {
 	UpdatedAt time.Time `yaml:"updated_at" json:"updated_at"`
 	Source    string    `yaml:"source"     json:"source"`
 	Status   string    `yaml:"status"     json:"status"`
+	Summary  string    `yaml:"summary,omitempty" json:"summary,omitempty"`
 }
 
 // Project groups related notes together.

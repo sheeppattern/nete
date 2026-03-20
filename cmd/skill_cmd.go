@@ -301,6 +301,9 @@ Every note belongs to a layer:
 # Concrete notes (facts)
 zk note create --title "Title" --content "Body" --tags "t1,t2" --layer concrete --project <id>
 
+# With summary (for quick scanning)
+zk note create --title "Title" --content "Body" --summary "Brief description" --project <id>
+
 # Abstract notes (insights)
 zk note create --title "Tension: X vs Y" --content "..." --layer abstract --project <id>
 
@@ -311,6 +314,7 @@ zk note get <noteID> --project <id>
 zk note list --project <id>
 zk note list --layer abstract --project <id>     # Filter by layer
 zk note update <noteID> --title "New" --project <id>
+zk note update <noteID> --summary "Updated summary" --project <id>
 zk note delete <noteID> --project <id>           # Blocked if backlinks exist
 zk note delete <noteID> --force --project <id>   # Force (moves to trash/)
 zk note move <noteID> <targetProject> --project <sourceProject>
@@ -496,6 +500,7 @@ zk export --project P-XXX --output snapshot.yaml
 
 ## Key Notes
 
+- Note metadata supports an optional ` + "`summary`" + ` field for quick scanning
 - Note files use YAML frontmatter + Markdown body format
 - Links are bidirectional (add creates both source→target and target→source)
 - Without --project, notes go to global scope
@@ -571,6 +576,7 @@ The power of zk comes from the interplay between layers:
 8. **Use specific relation types**: Don't just use "related" — express the actual relationship
 9. **Leverage search filters**: Combine --tags, --relation, --min-weight, --layer for precise queries
 10. **Track abstraction ratio**: Aim for 20-30% abstract notes; below 10% suggests missing insights
+11. **Write summaries for long notes**: Notes over 500 chars benefit from a summary — agents scan summaries before reading full content
 
 ## Anti-Patterns
 
