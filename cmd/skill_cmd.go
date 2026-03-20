@@ -332,9 +332,11 @@ zk link list <noteID> --sort-weight                 # Sort by weight desc
 zk link list <noteID> --depth 3 --project <id>     # BFS traversal
 ` + bt + `
 
-Relation types: related (default), supports, contradicts, extends, causes, example-of, abstracts, grounds
+Relation types: related (default), supports, contradicts, extends, causes, example-of, abstracts, grounds, replaces, invalidates
 - abstracts: concrete → abstract ("this fact led to this insight")
 - grounds: abstract → concrete ("this insight is grounded in this fact")
+- replaces: new note supersedes an older one
+- invalidates: data disproves a hypothesis
 
 Duplicate links are automatically prevented.
 Cross-project backlinks are included in link list results.
@@ -539,6 +541,8 @@ The power of zk comes from the interplay between layers:
 | example-of | Instance | any → any | Concrete example of a concept |
 | abstracts | Insight derivation | concrete → abstract | "This fact led to this insight" |
 | grounds | Evidence grounding | abstract → concrete | "This insight is based on this fact" |
+| replaces | Supersession | any → any | New note supersedes an older one |
+| invalidates | Disproof | any → any | Data disproves a hypothesis |
 
 ### When to use abstracts/grounds
 - After creating several concrete notes, ask: "What pattern or tension do I see?"

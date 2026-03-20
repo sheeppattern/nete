@@ -898,5 +898,56 @@ func TestCLIExploreMD(t *testing.T) {
 	}
 }
 
+func TestCLIReflectBloatedNote(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "bloat-proj", "")
+
+	// Create a note with very long content (>1000 chars).
+	longContent := strings.Repeat("This is a sentence that is repeated many times to create bloated content. ", 30)
+	createNote(t, storeDir, projID, "Bloated Note", longContent, nil)
+
+	// Run reflect.
+	stdout := mustRunZK(t, storeDir, "reflect", "--project", projID, "--format", "json")
+	var report struct {
+		Insights []struct {
+			Type string `json:"type"`
+		} `json:"insights"`
+	}
+	parseJSON(t, stdout, &report)
+
+	foundBloated := false
+	for _, ins := range report.Insights {
+		if ins.Type == "bloated_note" {
+			foundBloated = true
+			break
+		}
+	}
+	if !foundBloated {
+		t.Error("expected insight of type 'bloated_note' in reflect output for note with >1000 chars")
+	}
+}
+
+func TestCLIFormatMDConsistency(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "md-fmt-proj", "")
+	noteID := createNote(t, storeDir, projID, "MD Format Note", "Some content here", nil)
+
+	// note get --format md should produce markdown, not JSON.
+	stdout := mustRunZK(t, storeDir, "note", "get", noteID, "--project", projID, "--format", "md")
+	if !strings.Contains(stdout, "# ") {
+		t.Errorf("expected markdown heading '# ' in md output, got:\n%s", stdout)
+	}
+	if strings.HasPrefix(strings.TrimSpace(stdout), "{") {
+		t.Errorf("md format output should not start with '{' (JSON), got:\n%s", stdout)
+	}
+
+	// link list --format md should not produce JSON even with 0 links.
+	stdout = mustRunZK(t, storeDir, "link", "list", noteID, "--project", projID, "--format", "md")
+	trimmed := strings.TrimSpace(stdout)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		t.Errorf("link list --format md should not start with '{' or '[', got:\n%s", stdout)
+	}
+}
+
 // Prevent unused import warning for fmt.
 var _ = fmt.Sprintf
