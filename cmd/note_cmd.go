@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"crypto/rand"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -332,7 +334,54 @@ var noteMoveCmd = &cobra.Command{
 	},
 }
 
+var noteRandomCmd = &cobra.Command{
+	Use:   "random",
+	Short: "Pick a random note from all notes across every project",
+	Example: `  zk note random
+  zk note random --layer abstract
+  zk note random --format md`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		layerFilter, _ := cmd.Flags().GetString("layer")
+
+		s := store.NewStore(getStorePath(cmd))
+
+		// Collect notes from all projects + global.
+		var allNotes []*model.Note
+		projects, _ := s.ListProjects()
+		for _, p := range projects {
+			pNotes, _ := s.ListNotes(p.ID)
+			allNotes = append(allNotes, pNotes...)
+		}
+		gNotes, _ := s.ListNotes("")
+		allNotes = append(allNotes, gNotes...)
+
+		if layerFilter != "" {
+			filtered := make([]*model.Note, 0, len(allNotes))
+			for _, n := range allNotes {
+				if n.Layer == layerFilter {
+					filtered = append(filtered, n)
+				}
+			}
+			allNotes = filtered
+		}
+
+		if len(allNotes) == 0 {
+			return fmt.Errorf("no notes found")
+		}
+
+		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(allNotes))))
+		if err != nil {
+			return fmt.Errorf("random selection: %w", err)
+		}
+
+		return getFormatter().PrintNote(allNotes[idx.Int64()])
+	},
+}
+
 func init() {
+	// noteRandomCmd flags
+	noteRandomCmd.Flags().String("layer", "", "filter by layer (concrete, abstract)")
+
 	// noteCreateCmd flags
 	noteCreateCmd.Flags().String("title", "", "note title (required)")
 	noteCreateCmd.Flags().String("content", "", "note content (required)")
@@ -364,6 +413,7 @@ func init() {
 	noteCmd.AddCommand(noteUpdateCmd)
 	noteCmd.AddCommand(noteDeleteCmd)
 	noteCmd.AddCommand(noteMoveCmd)
+	noteCmd.AddCommand(noteRandomCmd)
 
 	rootCmd.AddCommand(noteCmd)
 }
