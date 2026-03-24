@@ -1155,13 +1155,22 @@ func TestCLIDiagnoseMissingBacklink(t *testing.T) {
 		t.Fatalf("expected 'missing backlink' warning, got: %s", stdout)
 	}
 
-	// Fix should repair the missing backlink.
-	mustRunZK(t, storeDir, "diagnose", "--fix", "--project", projID)
+	// Fix should repair the missing backlink and report it.
+	stdout = mustRunZK(t, storeDir, "diagnose", "--fix", "--project", projID)
+	parseJSON(t, stdout, &report)
+	repaired := report["repaired"].([]interface{})
+	if len(repaired) == 0 {
+		t.Fatalf("expected repaired items in fix report, got: %s", stdout)
+	}
+	summary := report["summary"].(map[string]interface{})
+	if summary["repaired_count"].(float64) == 0 {
+		t.Fatalf("expected repaired_count > 0, got: %s", stdout)
+	}
 
 	// Re-diagnose: should be healthy now.
 	stdout = mustRunZK(t, storeDir, "diagnose", "--project", projID)
 	parseJSON(t, stdout, &report)
-	summary := report["summary"].(map[string]interface{})
+	summary = report["summary"].(map[string]interface{})
 	if summary["health_score"] != "healthy" {
 		t.Fatalf("expected healthy after fix, got: %s", stdout)
 	}
@@ -1199,8 +1208,13 @@ func TestCLIDiagnoseFixBrokenLink(t *testing.T) {
 		t.Fatalf("expected 'broken link' error, got: %s", stdout)
 	}
 
-	// Fix should remove the broken link.
-	mustRunZK(t, storeDir, "diagnose", "--fix", "--project", projID)
+	// Fix should remove the broken link and report it.
+	stdout = mustRunZK(t, storeDir, "diagnose", "--fix", "--project", projID)
+	parseJSON(t, stdout, &report)
+	repaired := report["repaired"].([]interface{})
+	if len(repaired) == 0 {
+		t.Fatalf("expected repaired items in fix report, got: %s", stdout)
+	}
 
 	// Re-diagnose: no more broken link errors.
 	stdout = mustRunZK(t, storeDir, "diagnose", "--project", projID)
