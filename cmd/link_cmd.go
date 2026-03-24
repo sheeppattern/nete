@@ -39,14 +39,11 @@ var linkAddCmd = &cobra.Command{
 		weight, _ := cmd.Flags().GetFloat64("weight")
 
 		if !model.IsValidRelationType(relType) {
-			fmt.Fprintf(os.Stderr, "error: invalid relation type %q (valid: %s)\n",
-				relType, strings.Join(model.ValidRelationTypes(), ", "))
-			os.Exit(1)
+			return fmt.Errorf("invalid relation type %q (valid: %s)", relType, strings.Join(model.ValidRelationTypes(), ", "))
 		}
 
 		if weight < 0.0 || weight > 1.0 {
-			fmt.Fprintln(os.Stderr, "error: weight must be between 0.0 and 1.0")
-			os.Exit(1)
+			return fmt.Errorf("weight must be between 0.0 and 1.0")
 		}
 
 		s, err := openStore(cmd)

@@ -105,12 +105,17 @@ func getDBPath(cmd *cobra.Command) string {
 	return filepath.Join(storePath, "store.db")
 }
 
-// openStore opens the SQLite database and returns a Store. Caller must defer Close().
+// openStore opens the SQLite database, ensures schema exists, and returns a Store.
+// Caller must defer Close().
 func openStore(cmd *cobra.Command) (*store.Store, error) {
 	dbPath := getDBPath(cmd)
 	s, err := store.NewStore(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open store at %s: %w", dbPath, err)
+	}
+	if err := s.Init(); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("init store: %w", err)
 	}
 	return s, nil
 }

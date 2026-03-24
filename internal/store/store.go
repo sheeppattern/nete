@@ -41,6 +41,8 @@ func NewStore(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+	// SQLite requires single connection to ensure pragmas apply consistently.
+	db.SetMaxOpenConns(1)
 	// Verify connectivity.
 	if err := db.Ping(); err != nil {
 		db.Close()
@@ -235,8 +237,12 @@ func (s *Store) DeleteNote(id int64) error {
 // CreateMemo inserts a memo and sets memo.ID from the auto-generated row ID.
 func (s *Store) CreateMemo(memo *model.Memo) error {
 	now := time.Now().UTC()
-	memo.Metadata.CreatedAt = now
-	memo.Metadata.UpdatedAt = now
+	if memo.Metadata.CreatedAt.IsZero() {
+		memo.Metadata.CreatedAt = now
+	}
+	if memo.Metadata.UpdatedAt.IsZero() {
+		memo.Metadata.UpdatedAt = now
+	}
 	if memo.Tags == nil {
 		memo.Tags = []string{}
 	}
@@ -252,13 +258,14 @@ func (s *Store) CreateMemo(memo *model.Memo) error {
 		return fmt.Errorf("marshal tags: %w", err)
 	}
 
-	nowStr := now.Format(time.RFC3339)
+	createdStr := memo.Metadata.CreatedAt.Format(time.RFC3339)
+	updatedStr := memo.Metadata.UpdatedAt.Format(time.RFC3339)
 	result, err := s.db.Exec(
 		`INSERT INTO memos (title, content, tags, layer, note_id, status, author, source, summary, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		memo.Title, memo.Content, string(tagsJSON), memo.Layer, memo.NoteID,
 		memo.Metadata.Status, memo.Metadata.Author, memo.Metadata.Source, memo.Metadata.Summary,
-		nowStr, nowStr,
+		createdStr, updatedStr,
 	)
 	if err != nil {
 		return fmt.Errorf("insert memo: %w", err)
@@ -346,6 +353,9 @@ func (s *Store) DeleteMemo(id int64) error {
 
 	if _, err := tx.Exec("INSERT INTO trash (id, original_data, deleted_at) VALUES (?, ?, ?)", id, string(data), now); err != nil {
 		return fmt.Errorf("insert trash: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM links WHERE source_id = ? OR target_id = ?", id, id); err != nil {
+		return fmt.Errorf("delete links for memo: %w", err)
 	}
 	if _, err := tx.Exec("DELETE FROM memos WHERE id = ?", id); err != nil {
 		return fmt.Errorf("delete memo: %w", err)
@@ -440,10 +450,10 @@ func (s *Store) SearchMemos(query string, opts SearchOptions) ([]*model.Memo, er
 		conditions = append(conditions, "m.created_at <= ?")
 		args = append(args, opts.CreatedBefore.Format(time.RFC3339))
 	}
-	// Tag filtering: check if each tag exists in the JSON array.
+	// Tag filtering: exact match via json_each().
 	for _, tag := range opts.Tags {
-		conditions = append(conditions, "m.tags LIKE ?")
-		args = append(args, "%"+tag+"%")
+		conditions = append(conditions, "EXISTS (SELECT 1 FROM json_each(m.tags) WHERE value = ?)")
+		args = append(args, tag)
 	}
 
 	if len(conditions) > 0 {
@@ -548,10 +558,19 @@ func (s *Store) ListLinks(memoID int64) (outgoing []model.Link, incoming []model
 	return outgoing, incoming, rows2.Err()
 }
 
+// maxBFSDepth is the hard cap on BFS traversal depth.
+const maxBFSDepth = 5
+
+// maxBFSResults is the hard cap on BFS result count.
+const maxBFSResults = 1000
+
 // ListLinksBFS performs a breadth-first traversal from a memo up to the given depth.
 func (s *Store) ListLinksBFS(memoID int64, depth int) ([]LinkWithDepth, error) {
 	if depth <= 0 {
 		return nil, nil
+	}
+	if depth > maxBFSDepth {
+		depth = maxBFSDepth
 	}
 
 	visited := map[int64]bool{memoID: true}
@@ -562,7 +581,7 @@ func (s *Store) ListLinksBFS(memoID int64, depth int) ([]LinkWithDepth, error) {
 
 	var result []LinkWithDepth
 
-	for len(queue) > 0 {
+	for len(queue) > 0 && len(result) < maxBFSResults {
 		current := queue[0]
 		queue = queue[1:]
 
@@ -570,7 +589,6 @@ func (s *Store) ListLinksBFS(memoID int64, depth int) ([]LinkWithDepth, error) {
 			continue
 		}
 
-		// Get all links where current node is source or target.
 		rows, err := s.db.Query(
 			"SELECT source_id, target_id, relation_type, weight FROM links WHERE source_id = ? OR target_id = ?",
 			current.id, current.id,
@@ -594,12 +612,10 @@ func (s *Store) ListLinksBFS(memoID int64, depth int) ([]LinkWithDepth, error) {
 		}
 
 		for _, l := range links {
-			// Determine the neighbor node.
 			neighbor := l.TargetID
 			if neighbor == current.id {
 				neighbor = l.SourceID
 			}
-			// Only include this link if it leads to a new or unvisited node.
 			if !visited[neighbor] {
 				result = append(result, LinkWithDepth{Link: l, Depth: current.depth + 1})
 				visited[neighbor] = true

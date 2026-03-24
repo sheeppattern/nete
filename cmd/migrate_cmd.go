@@ -166,7 +166,11 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	for _, n := range oldNotes {
 		noteID := int64(0)
 		if n.ProjectID != "" {
-			noteID = projectMap[n.ProjectID]
+			if mapped, ok := projectMap[n.ProjectID]; ok {
+				noteID = mapped
+			} else {
+				statusf("warning: memo %s references unknown project %s, placing in global scope", n.Frontmatter.ID, n.ProjectID)
+			}
 		}
 
 		tags := n.Frontmatter.Tags

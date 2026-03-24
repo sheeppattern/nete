@@ -24,7 +24,7 @@ var serveCmd = &cobra.Command{
 }
 
 func init() {
-	serveCmd.Flags().String("addr", ":8080", "listen address (host:port)")
+	serveCmd.Flags().String("addr", "127.0.0.1:8080", "listen address (host:port)")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -54,7 +54,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	mux.Handle("/", http.FileServer(http.FS(webFS)))
 
-	handler := maxBodyMiddleware(corsMiddleware(mux))
+	handler := maxBodyMiddleware(mux)
 
 	if strings.HasPrefix(addr, ":") {
 		statusf("zk web GUI at http://localhost%s", addr)
@@ -64,22 +64,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 	statusf("press Ctrl+C to stop")
 
 	return http.ListenAndServe(addr, handler)
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if origin := r.Header.Get("Origin"); origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			w.Header().Set("Vary", "Origin")
-		}
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(204)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // maxBodyMiddleware limits request body size to prevent DoS.

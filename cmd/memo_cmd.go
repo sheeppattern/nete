@@ -186,8 +186,7 @@ var memoUpdateCmd = &cobra.Command{
 var memoDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
 	Short: "Delete a memo by ID",
-	Example: `  zk memo delete 1
-  zk memo delete 1 --force`,
+	Example: `  zk memo delete 1`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id, err := strconv.ParseInt(args[0], 10, 64)
@@ -306,9 +305,6 @@ func init() {
 
 	// memoListCmd flags
 	memoListCmd.Flags().String("layer", "", "filter by layer (concrete, abstract)")
-
-	// memoDeleteCmd flags
-	memoDeleteCmd.Flags().Bool("force", false, "force deletion")
 
 	// Register subcommands
 	memoCmd.AddCommand(memoCreateCmd)
