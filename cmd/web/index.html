@@ -35,14 +35,24 @@
         <span class="save-text">Unsaved changes</span>
         <button class="save-btn" id="saveBtn" aria-label="Save changes">Save (Ctrl+S)</button>
       </div>
-      <textarea class="content-textarea" id="contentArea" aria-label="Memo content"></textarea>
-      <div class="section-label">Tags</div>
-      <div class="tags-area" id="tagsArea"></div>
-      <div class="section-label">Links</div>
-      <div id="linksArea"></div>
-      <div class="section-label">Metadata</div>
-      <div class="meta-grid" id="metaGrid"></div>
-      <button class="note-delete-btn" id="deleteBtn" aria-label="Delete this memo">Delete Memo</button>
+      <div class="editor-flow">
+        <div class="link-panel link-panel-in" id="linksIncoming">
+          <div class="link-panel-header">Incoming</div>
+          <div class="link-panel-list" id="linksInList"></div>
+        </div>
+        <div class="editor-main">
+          <textarea class="content-textarea" id="contentArea" aria-label="Memo content"></textarea>
+          <div class="section-label">Tags</div>
+          <div class="tags-area" id="tagsArea"></div>
+          <div class="section-label">Metadata</div>
+          <div class="meta-grid" id="metaGrid"></div>
+          <button class="note-delete-btn" id="deleteBtn" aria-label="Delete this memo">Delete Memo</button>
+        </div>
+        <div class="link-panel link-panel-out" id="linksOutgoing">
+          <div class="link-panel-header">Outgoing</div>
+          <div class="link-panel-list" id="linksOutList"></div>
+        </div>
+      </div>
     </div>
   </div>
 

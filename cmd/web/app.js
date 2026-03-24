@@ -174,43 +174,42 @@ async function removeTag(tag) {
   showToast(`Tag "${tag}" removed`, 'success');
 }
 
+function renderLinkItem(l, navId) {
+  const m = S.memoMap[navId];
+  const title = m ? m.title : 'Memo #' + navId;
+  const w = l.weight ? l.weight.toFixed(1) : '';
+  return `<div class="link-item" data-link-nav="${esc(navId)}" role="button" tabindex="0">
+    <div class="link-meta">
+      <span class="link-type ${esc(l.relation_type)}">${esc(l.relation_type)}</span>
+      ${w ? '<span class="link-weight">' + esc(w) + '</span>' : ''}
+      <span class="link-delete" data-link-del-source="${esc(l.source_id)}" data-link-del-target="${esc(l.target_id)}" data-link-del-type="${esc(l.relation_type)}" title="Remove link" role="button" tabindex="0" aria-label="Remove link">${ICO.x}</span>
+    </div>
+    <span class="link-title">${esc(trunc(title, 24))}</span>
+  </div>`;
+}
+
 function renderLinks() {
-  const area = document.getElementById('linksArea');
+  const inList = document.getElementById('linksInList');
+  const outList = document.getElementById('linksOutList');
   const links = S.selected && S.selected.links;
-  if (!links || (links.outgoing.length === 0 && links.incoming.length === 0)) {
-    area.innerHTML = '<div class="links-empty">No links</div>';
+
+  if (!links) {
+    inList.innerHTML = '<div class="links-empty">None</div>';
+    outList.innerHTML = '<div class="links-empty">None</div>';
     return;
   }
-  let html = '';
-  if (links.outgoing.length > 0) {
-    html += '<div class="link-group-label">Outgoing</div>';
-    links.outgoing.forEach(l => {
-      const target = S.memoMap[l.target_id];
-      const title = target ? target.title : 'Memo #' + l.target_id;
-      const w = l.weight ? l.weight.toFixed(1) : '';
-      html += `<div class="link-item" data-link-nav="${esc(l.target_id)}" role="button" tabindex="0">
-        <span class="link-type ${esc(l.relation_type)}">${esc(l.relation_type)}</span>
-        <span class="link-title">${esc(trunc(title, 30))}</span>
-        ${w ? '<span class="link-weight">' + esc(w) + '</span>' : ''}
-        <span class="link-delete" data-link-del-source="${esc(l.source_id)}" data-link-del-target="${esc(l.target_id)}" data-link-del-type="${esc(l.relation_type)}" title="Remove link" role="button" tabindex="0" aria-label="Remove link">${ICO.x}</span>
-      </div>`;
-    });
-  }
+
   if (links.incoming.length > 0) {
-    html += '<div class="link-group-label">Incoming</div>';
-    links.incoming.forEach(l => {
-      const source = S.memoMap[l.source_id];
-      const title = source ? source.title : 'Memo #' + l.source_id;
-      const w = l.weight ? l.weight.toFixed(1) : '';
-      html += `<div class="link-item" data-link-nav="${esc(l.source_id)}" role="button" tabindex="0">
-        <span class="link-type ${esc(l.relation_type)}">${esc(l.relation_type)}</span>
-        <span class="link-title">${esc(trunc(title, 30))}</span>
-        ${w ? '<span class="link-weight">' + esc(w) + '</span>' : ''}
-        <span class="link-delete" data-link-del-source="${esc(l.source_id)}" data-link-del-target="${esc(l.target_id)}" data-link-del-type="${esc(l.relation_type)}" title="Remove link" role="button" tabindex="0" aria-label="Remove link">${ICO.x}</span>
-      </div>`;
-    });
+    inList.innerHTML = links.incoming.map(l => renderLinkItem(l, l.source_id)).join('');
+  } else {
+    inList.innerHTML = '<div class="links-empty">None</div>';
   }
-  area.innerHTML = html;
+
+  if (links.outgoing.length > 0) {
+    outList.innerHTML = links.outgoing.map(l => renderLinkItem(l, l.target_id)).join('');
+  } else {
+    outList.innerHTML = '<div class="links-empty">None</div>';
+  }
 }
 
 async function deleteLink(source, target, type) {
@@ -302,21 +301,25 @@ function setupEvents() {
     if (rm && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); removeTag(rm.dataset.tagRemove); }
   });
 
-  // Links delegation (click to navigate, delete button)
-  document.getElementById('linksArea').addEventListener('click', e => {
+  // Links delegation on both panels (click to navigate, delete button)
+  function linkClickHandler(e) {
     const del = e.target.closest('[data-link-del-source]');
     if (del) { e.stopPropagation(); deleteLink(del.dataset.linkDelSource, del.dataset.linkDelTarget, del.dataset.linkDelType); return; }
     const nav = e.target.closest('[data-link-nav]');
     if (nav) selectMemo(Number(nav.dataset.linkNav));
-  });
-  document.getElementById('linksArea').addEventListener('keydown', e => {
+  }
+  function linkKeyHandler(e) {
     if (e.key === 'Enter' || e.key === ' ') {
       const del = e.target.closest('[data-link-del-source]');
       if (del) { e.preventDefault(); e.stopPropagation(); deleteLink(del.dataset.linkDelSource, del.dataset.linkDelTarget, del.dataset.linkDelType); return; }
       const nav = e.target.closest('[data-link-nav]');
       if (nav) { e.preventDefault(); selectMemo(Number(nav.dataset.linkNav)); }
     }
-  });
+  }
+  document.getElementById('linksInList').addEventListener('click', linkClickHandler);
+  document.getElementById('linksInList').addEventListener('keydown', linkKeyHandler);
+  document.getElementById('linksOutList').addEventListener('click', linkClickHandler);
+  document.getElementById('linksOutList').addEventListener('keydown', linkKeyHandler);
 
   // Search with debounce - uses server-side FTS5 search when query is present
   let searchTimer = null;
