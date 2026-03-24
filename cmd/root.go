@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/spf13/cobra"
 	"github.com/sheeppattern/zk/internal/output"
@@ -15,7 +16,7 @@ var Version = "dev"
 
 var (
 	flagFormat  string
-	flagProject string
+	flagNote    int64
 	flagVerbose bool
 	flagQuiet   bool
 )
@@ -23,31 +24,16 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "zk",
 	Short: "Zettelkasten memory CLI for AI agents",
-	Long:  "A Zettelkasten-style memory system designed for AI agents to store, link, and retrieve knowledge notes.",
+	Long:  "A Zettelkasten-style memory system designed for AI agents to store, link, and retrieve knowledge memos.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Auto-update skill files if the binary is newer than on-disk versions.
 		AutoUpdateSkillsIfNeeded()
-
-		// Apply default project from config if --project not explicitly set.
-		if flagProject == "" {
-			storePath := getStorePathSilent(cmd)
-			if storePath != "" {
-				cfgPath := filepath.Join(storePath, "config.yaml")
-				if _, err := os.Stat(cfgPath); err == nil {
-					s := store.NewStore(storePath)
-					if cfg, err := s.LoadConfig(); err == nil && cfg.DefaultProject != "" {
-						flagProject = cfg.DefaultProject
-						debugf("using default project from config: %s", cfg.DefaultProject)
-					}
-				}
-			}
-		}
 	},
 }
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "json", "output format: json, yaml, md")
-	rootCmd.PersistentFlags().StringVar(&flagProject, "project", "", "project scope for notes")
+	rootCmd.PersistentFlags().Int64Var(&flagNote, "note", 0, "note scope for memos (0 = global)")
 	rootCmd.PersistentFlags().BoolVar(&flagVerbose, "verbose", false, "enable verbose output")
 	rootCmd.PersistentFlags().BoolVar(&flagQuiet, "quiet", false, "suppress stderr status messages")
 
@@ -76,7 +62,7 @@ func Execute() {
 	}
 }
 
-// getStorePath returns the store path by checking:
+// getStorePath returns the store directory path by checking:
 // 1) --path flag value, 2) ZKMEMORY_PATH env var, 3) default ~/.zk-memory.
 func getStorePath(cmd *cobra.Command) string {
 	if p, _ := cmd.Flags().GetString("path"); p != "" {
@@ -93,19 +79,35 @@ func getStorePath(cmd *cobra.Command) string {
 	return filepath.Join(home, ".zk-memory")
 }
 
-// getStorePathSilent is like getStorePath but returns empty string instead of exiting on error.
-func getStorePathSilent(cmd *cobra.Command) string {
-	if p, _ := cmd.Flags().GetString("path"); p != "" {
-		return p
-	}
-	if env := os.Getenv("ZKMEMORY_PATH"); env != "" {
-		return env
-	}
-	home, err := os.UserHomeDir()
+// getDBPath returns the path to store.db file.
+func getDBPath(cmd *cobra.Command) string {
+	storePath := getStorePath(cmd)
+	return filepath.Join(storePath, "store.db")
+}
+
+// openStore opens the SQLite database, ensures schema exists, and returns a Store.
+// It also applies the default note from config if --note was not explicitly set.
+// Caller must defer Close().
+func openStore(cmd *cobra.Command) (*store.Store, error) {
+	dbPath := getDBPath(cmd)
+	s, err := store.NewStore(dbPath)
 	if err != nil {
-		return ""
+		return nil, fmt.Errorf("open store at %s: %w", dbPath, err)
 	}
-	return filepath.Join(home, ".zk-memory")
+	if err := s.Init(); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("init store: %w", err)
+	}
+	// Apply default note from config if --note not explicitly set.
+	if !cmd.Flags().Changed("note") {
+		if cfg, err := s.LoadConfig(); err == nil && cfg.DefaultNote != "" {
+			if parsed, err := strconv.ParseInt(cfg.DefaultNote, 10, 64); err == nil {
+				flagNote = parsed
+				debugf("using default note from config: %d", flagNote)
+			}
+		}
+	}
+	return s, nil
 }
 
 // getFormatter returns a formatter based on the --format flag.
