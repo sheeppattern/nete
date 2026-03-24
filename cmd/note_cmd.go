@@ -347,12 +347,22 @@ var noteRandomCmd = &cobra.Command{
 
 		// Collect notes from all projects + global.
 		var allNotes []*model.Note
-		projects, _ := s.ListProjects()
+		projects, err := s.ListProjects()
+		if err != nil {
+			debugf("list projects: %v", err)
+		}
 		for _, p := range projects {
-			pNotes, _ := s.ListNotes(p.ID)
+			pNotes, pErr := s.ListNotes(p.ID)
+			if pErr != nil {
+				debugf("list notes for project %s: %v", p.ID, pErr)
+				continue
+			}
 			allNotes = append(allNotes, pNotes...)
 		}
-		gNotes, _ := s.ListNotes("")
+		gNotes, gErr := s.ListNotes("")
+		if gErr != nil {
+			debugf("list global notes: %v", gErr)
+		}
 		allNotes = append(allNotes, gNotes...)
 
 		if layerFilter != "" {

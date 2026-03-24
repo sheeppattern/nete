@@ -1100,5 +1100,50 @@ func TestTagReplaceDuplicates(t *testing.T) {
 	}
 }
 
+func TestCLINoteRandom(t *testing.T) {
+	storeDir := initStore(t)
+	projID := createProject(t, storeDir, "rand-proj", "")
+
+	// Empty store should fail.
+	_, _, err := runZK(t, storeDir, "note", "random")
+	if err == nil {
+		t.Fatal("expected error for random on empty store")
+	}
+
+	// Create notes across project and global.
+	noteA := createNote(t, storeDir, projID, "Project Note", "content A", []string{"a"})
+	mustRunZK(t, storeDir, "note", "create", "--title", "Global Note", "--content", "content B", "--tags", "b")
+	mustRunZK(t, storeDir, "note", "create", "--title", "Abstract Insight", "--content", "insight", "--layer", "abstract", "--project", projID)
+
+	// Random should return a valid note.
+	stdout := mustRunZK(t, storeDir, "note", "random")
+	var note map[string]interface{}
+	parseJSON(t, stdout, &note)
+	id, ok := note["id"].(string)
+	if !ok || !strings.HasPrefix(id, "N-") {
+		t.Fatalf("expected valid note ID, got %v", note["id"])
+	}
+
+	// --layer abstract should only return abstract notes.
+	for i := 0; i < 10; i++ {
+		stdout = mustRunZK(t, storeDir, "note", "random", "--layer", "abstract")
+		parseJSON(t, stdout, &note)
+		if note["layer"] != "abstract" {
+			t.Fatalf("expected abstract layer, got %v", note["layer"])
+		}
+	}
+
+	// --layer concrete should never return the abstract note.
+	for i := 0; i < 10; i++ {
+		stdout = mustRunZK(t, storeDir, "note", "random", "--layer", "concrete")
+		parseJSON(t, stdout, &note)
+		if note["layer"] != "concrete" {
+			t.Fatalf("expected concrete layer, got %v", note["layer"])
+		}
+	}
+
+	_ = noteA
+}
+
 // Prevent unused import warning for fmt.
 var _ = fmt.Sprintf
