@@ -113,7 +113,10 @@ async function selectMemo(id) {
   const note = S.notes.find(n => n.id === memo.note_id);
   document.getElementById('editorProject').textContent = note ? note.name : 'Global';
   document.getElementById('titleInput').value = memo.title;
+  document.getElementById('summaryInput').value = memo.metadata?.summary || '';
   document.getElementById('contentArea').value = memo.content;
+  document.getElementById('statusSelect').value = memo.metadata?.status || 'active';
+  document.getElementById('sourceInput').value = memo.metadata?.source || '';
   document.getElementById('saveBar').classList.remove('visible');
   renderTags(memo);
   renderLinks();
@@ -131,6 +134,9 @@ async function saveMemo() {
   const result = await api.put(`/api/memo?id=${encodeURIComponent(S.selected.id)}`, {
     title: document.getElementById('titleInput').value,
     content: document.getElementById('contentArea').value,
+    summary: document.getElementById('summaryInput').value,
+    status: document.getElementById('statusSelect').value,
+    source: document.getElementById('sourceInput').value,
   });
   if (result.error) { showToast(result.error, 'error'); return; }
   S.selected = result; S.memoMap[result.id] = result;
@@ -266,10 +272,8 @@ function renderMeta(memo) {
   const cr = memo.metadata?.created_at ? new Date(memo.metadata.created_at).toLocaleString() : '\u2014';
   const up = memo.metadata?.updated_at ? new Date(memo.metadata.updated_at).toLocaleString() : '\u2014';
   const author = memo.metadata?.author || '\u2014';
-  document.getElementById('metaGrid').innerHTML = `
-    <span class="meta-label">Created</span><span class="meta-value">${esc(cr)}</span>
-    <span class="meta-label">Updated</span><span class="meta-value">${esc(up)}</span>
-    <span class="meta-label">Author</span><span class="meta-value">${esc(author)}</span>`;
+  document.getElementById('metaGrid').innerHTML =
+    `by <span>${esc(author)}</span> · ${esc(cr)}<br>updated ${esc(up)}`;
 }
 
 async function deleteCurrentMemo() {
@@ -318,7 +322,10 @@ function setupEvents() {
 
   // Editor events
   document.getElementById('titleInput').addEventListener('input', markDirty);
+  document.getElementById('summaryInput').addEventListener('input', markDirty);
   document.getElementById('contentArea').addEventListener('input', markDirty);
+  document.getElementById('statusSelect').addEventListener('change', markDirty);
+  document.getElementById('sourceInput').addEventListener('input', markDirty);
   document.getElementById('saveBtn').addEventListener('click', saveMemo);
   document.getElementById('deleteBtn').addEventListener('click', deleteCurrentMemo);
 

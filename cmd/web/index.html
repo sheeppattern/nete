@@ -14,28 +14,41 @@
     <div class="editor">
       <div class="editor-empty" id="editorEmpty">Select a memo to view and edit</div>
       <div class="editor-content" id="editorContent">
-        <div class="editor-topbar">
-          <span class="editor-id" id="editorId"></span>
-          <span class="layer-badge" id="editorLayer"></span>
-          <span class="editor-project" id="editorProject"></span>
-        </div>
-        <input class="title-input" id="titleInput" type="text" aria-label="Memo title" />
-        <div class="save-bar" id="saveBar">
-          <span class="save-text">Unsaved changes</span>
-          <button class="save-btn" id="saveBtn" aria-label="Save changes">Save (Ctrl+S)</button>
-        </div>
         <div class="editor-flow">
           <div class="link-panel link-panel-in" id="linksIncoming">
             <div class="link-panel-header">Incoming</div>
             <div class="link-panel-list" id="linksInList"></div>
           </div>
           <div class="editor-main">
+            <div class="editor-topbar">
+              <span class="editor-id" id="editorId"></span>
+              <span class="layer-badge" id="editorLayer"></span>
+              <select class="status-select" id="statusSelect" aria-label="Status">
+                <option value="active">active</option>
+                <option value="archived">archived</option>
+              </select>
+              <span class="editor-project" id="editorProject"></span>
+            </div>
+            <input class="title-input" id="titleInput" type="text" placeholder="Title" aria-label="Memo title" />
+            <input class="summary-input" id="summaryInput" type="text" placeholder="Summary (optional)" aria-label="Memo summary" />
+            <div class="save-bar" id="saveBar">
+              <span class="save-text">Unsaved changes</span>
+              <button class="save-btn" id="saveBtn" aria-label="Save changes">Save (Ctrl+S)</button>
+            </div>
             <textarea class="content-textarea" id="contentArea" aria-label="Memo content"></textarea>
-            <div class="section-label">Tags</div>
-            <div class="tags-area" id="tagsArea"></div>
-            <div class="section-label">Metadata</div>
-            <div class="meta-grid" id="metaGrid"></div>
-            <button class="note-delete-btn" id="deleteBtn" aria-label="Delete this memo">Delete Memo</button>
+            <div class="editor-footer">
+              <div class="editor-footer-left">
+                <div class="section-label">Tags</div>
+                <div class="tags-area" id="tagsArea"></div>
+              </div>
+              <div class="editor-footer-right">
+                <div class="meta-compact" id="metaGrid"></div>
+              </div>
+            </div>
+            <div class="editor-actions">
+              <input class="source-input" id="sourceInput" type="text" placeholder="Source URL (optional)" aria-label="Source" />
+              <button class="note-delete-btn" id="deleteBtn" aria-label="Delete this memo">Delete</button>
+            </div>
           </div>
           <div class="link-panel link-panel-out" id="linksOutgoing">
             <div class="link-panel-header">Outgoing</div>

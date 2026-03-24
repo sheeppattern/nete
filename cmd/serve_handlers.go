@@ -160,6 +160,9 @@ func (h *serveHandler) handleMemo(w http.ResponseWriter, r *http.Request) {
 			Title   *string  `json:"title"`
 			Content *string  `json:"content"`
 			Tags    []string `json:"tags"`
+			Summary *string  `json:"summary"`
+			Status  *string  `json:"status"`
+			Source  *string  `json:"source"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			jsonError(w, "invalid JSON body", 400)
@@ -179,6 +182,15 @@ func (h *serveHandler) handleMemo(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Tags != nil {
 			memo.Tags = body.Tags
+		}
+		if body.Summary != nil {
+			memo.Metadata.Summary = *body.Summary
+		}
+		if body.Status != nil {
+			memo.Metadata.Status = *body.Status
+		}
+		if body.Source != nil {
+			memo.Metadata.Source = *body.Source
 		}
 		if err := h.store.UpdateMemo(memo); err != nil {
 			debugf("update memo %d: %v", memoID, err)
