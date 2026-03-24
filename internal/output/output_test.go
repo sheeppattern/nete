@@ -61,7 +61,6 @@ func TestFormatterJSON(t *testing.T) {
 		}
 	})
 
-	// Verify it's valid JSON.
 	var parsed sample
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &parsed); err != nil {
 		t.Fatalf("output is not valid JSON: %v\noutput: %s", err, out)
@@ -94,21 +93,29 @@ func TestFormatterYAML(t *testing.T) {
 	}
 }
 
-func TestFormatterPrintNote(t *testing.T) {
+func TestFormatterPrintMemo(t *testing.T) {
 	f := NewFormatter("json")
-	note := model.NewNote("Test Note", "Some content", []string{"go", "test"})
+	memo := &model.Memo{
+		ID:      1,
+		Title:   "Test Memo",
+		Content: "Some content",
+		Tags:    []string{"go", "test"},
+		Layer:   model.LayerConcrete,
+		Metadata: model.Metadata{
+			Status: model.StatusActive,
+		},
+	}
 
 	out := captureStdout(t, func() {
-		if err := f.PrintNote(note); err != nil {
-			t.Fatalf("PrintNote() error: %v", err)
+		if err := f.PrintMemo(memo); err != nil {
+			t.Fatalf("PrintMemo() error: %v", err)
 		}
 	})
 
-	// The JSON output should include content (via noteView).
 	if !strings.Contains(out, "Some content") {
-		t.Fatalf("JSON note output missing content; got: %s", out)
+		t.Fatalf("JSON memo output missing content; got: %s", out)
 	}
-	if !strings.Contains(out, "Test Note") {
-		t.Fatalf("JSON note output missing title; got: %s", out)
+	if !strings.Contains(out, "Test Memo") {
+		t.Fatalf("JSON memo output missing title; got: %s", out)
 	}
 }

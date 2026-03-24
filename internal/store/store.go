@@ -1,457 +1,719 @@
 package store
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/sheeppattern/zk/internal/model"
-	"gopkg.in/yaml.v3"
+	_ "modernc.org/sqlite"
 )
 
-// Store manages file-system-based persistence for notes, projects, and config.
+// Store manages SQLite-based persistence for memos, notes, links, and config.
 type Store struct {
-	rootPath string
+	db *sql.DB
 }
 
-// NewStore creates a new Store rooted at the given directory path.
-func NewStore(rootPath string) *Store {
-	return &Store{rootPath: rootPath}
+// SearchOptions controls filtering and sorting for memo search.
+type SearchOptions struct {
+	NoteID        int64
+	Layer         string
+	Status        string
+	Author        string
+	Tags          []string
+	CreatedAfter  time.Time
+	CreatedBefore time.Time
+	Sort          string // "relevance", "created", "updated"
+	Limit         int
 }
 
-// NoteError records a note file that could not be parsed during a partial listing.
-type NoteError struct {
-	FilePath string
-	Err      error
+// LinkWithDepth represents a link discovered during BFS traversal with its depth.
+type LinkWithDepth struct {
+	model.Link
+	Depth int `json:"depth"`
 }
 
-// Init creates the full directory structure and a default config.yaml.
+// NewStore opens or creates a SQLite database at the given path.
+func NewStore(dbPath string) (*Store, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	// Verify connectivity.
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping database: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+// Close closes the underlying database connection.
+func (s *Store) Close() error {
+	return s.db.Close()
+}
+
+// Init creates all tables, indexes, triggers, and sets pragmas.
 func (s *Store) Init() error {
-	dirs := []string{
-		s.rootPath,
-		filepath.Join(s.rootPath, "projects"),
-		filepath.Join(s.rootPath, "global", "notes"),
-		filepath.Join(s.rootPath, "trash"),
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA foreign_keys=ON",
 	}
-	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0755); err != nil {
-			return fmt.Errorf("create directory %s: %w", d, err)
+	for _, p := range pragmas {
+		if _, err := s.db.Exec(p); err != nil {
+			return fmt.Errorf("exec pragma %q: %w", p, err)
 		}
 	}
 
-	cfgPath := filepath.Join(s.rootPath, "config.yaml")
-	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-		cfg := model.DefaultConfig()
-		cfg.StorePath = s.rootPath
-		if err := s.SaveConfig(cfg); err != nil {
-			return fmt.Errorf("write default config: %w", err)
-		}
+	schema := `
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS memos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    tags TEXT NOT NULL DEFAULT '[]',
+    layer TEXT NOT NULL DEFAULT 'concrete',
+    note_id INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',
+    author TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memos_fts USING fts5(
+    title, content, tags, summary,
+    content='memos', content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS memos_ai AFTER INSERT ON memos BEGIN
+    INSERT INTO memos_fts(rowid, title, content, tags, summary)
+    VALUES (new.id, new.title, new.content, new.tags, new.summary);
+END;
+CREATE TRIGGER IF NOT EXISTS memos_ad AFTER DELETE ON memos BEGIN
+    INSERT INTO memos_fts(memos_fts, rowid, title, content, tags, summary)
+    VALUES ('delete', old.id, old.title, old.content, old.tags, old.summary);
+END;
+CREATE TRIGGER IF NOT EXISTS memos_au AFTER UPDATE ON memos BEGIN
+    INSERT INTO memos_fts(memos_fts, rowid, title, content, tags, summary)
+    VALUES ('delete', old.id, old.title, old.content, old.tags, old.summary);
+    INSERT INTO memos_fts(rowid, title, content, tags, summary)
+    VALUES (new.id, new.title, new.content, new.tags, new.summary);
+END;
+
+CREATE TABLE IF NOT EXISTS links (
+    source_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    relation_type TEXT NOT NULL DEFAULT 'related',
+    weight REAL NOT NULL DEFAULT 0.5,
+    PRIMARY KEY (source_id, target_id, relation_type)
+);
+
+CREATE TABLE IF NOT EXISTS trash (
+    id INTEGER PRIMARY KEY,
+    original_data TEXT NOT NULL,
+    deleted_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memos_note ON memos(note_id);
+CREATE INDEX IF NOT EXISTS idx_memos_layer ON memos(layer);
+CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_id);
+CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_id);
+`
+	if _, err := s.db.Exec(schema); err != nil {
+		return fmt.Errorf("create schema: %w", err)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Notes (formerly Projects)
+// ---------------------------------------------------------------------------
+
+// CreateNote inserts a new note and returns it with the assigned ID.
+func (s *Store) CreateNote(name, description string) (*model.Note, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.Exec(
+		"INSERT INTO notes (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
+		name, description, now, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("insert note: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("get note id: %w", err)
+	}
+	t, _ := time.Parse(time.RFC3339, now)
+	return &model.Note{
+		ID:          id,
+		Name:        name,
+		Description: description,
+		CreatedAt:   t,
+		UpdatedAt:   t,
+	}, nil
+}
+
+// GetNote retrieves a note by ID.
+func (s *Store) GetNote(id int64) (*model.Note, error) {
+	var n model.Note
+	var createdAt, updatedAt string
+	err := s.db.QueryRow(
+		"SELECT id, name, description, created_at, updated_at FROM notes WHERE id = ?", id,
+	).Scan(&n.ID, &n.Name, &n.Description, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("note %d not found", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get note %d: %w", id, err)
+	}
+	n.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	n.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return &n, nil
+}
+
+// ListNotes returns all notes.
+func (s *Store) ListNotes() ([]*model.Note, error) {
+	rows, err := s.db.Query("SELECT id, name, description, created_at, updated_at FROM notes ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("list notes: %w", err)
+	}
+	defer rows.Close()
+
+	var notes []*model.Note
+	for rows.Next() {
+		var n model.Note
+		var createdAt, updatedAt string
+		if err := rows.Scan(&n.ID, &n.Name, &n.Description, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan note: %w", err)
+		}
+		n.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		n.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		notes = append(notes, &n)
+	}
+	return notes, rows.Err()
+}
+
+// DeleteNote removes a note by ID. Returns an error if the note has memos.
+func (s *Store) DeleteNote(id int64) error {
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM memos WHERE note_id = ?", id).Scan(&count); err != nil {
+		return fmt.Errorf("check memos for note %d: %w", id, err)
+	}
+	if count > 0 {
+		return fmt.Errorf("cannot delete note %d: has %d memos", id, count)
+	}
+	result, err := s.db.Exec("DELETE FROM notes WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete note %d: %w", id, err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("note %d not found", id)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Memos (formerly Notes)
+// ---------------------------------------------------------------------------
+
+// CreateMemo inserts a memo and sets memo.ID from the auto-generated row ID.
+func (s *Store) CreateMemo(memo *model.Memo) error {
+	now := time.Now().UTC()
+	memo.Metadata.CreatedAt = now
+	memo.Metadata.UpdatedAt = now
+	if memo.Tags == nil {
+		memo.Tags = []string{}
+	}
+	if memo.Layer == "" {
+		memo.Layer = model.LayerConcrete
+	}
+	if memo.Metadata.Status == "" {
+		memo.Metadata.Status = model.StatusActive
+	}
+
+	tagsJSON, err := json.Marshal(memo.Tags)
+	if err != nil {
+		return fmt.Errorf("marshal tags: %w", err)
+	}
+
+	nowStr := now.Format(time.RFC3339)
+	result, err := s.db.Exec(
+		`INSERT INTO memos (title, content, tags, layer, note_id, status, author, source, summary, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		memo.Title, memo.Content, string(tagsJSON), memo.Layer, memo.NoteID,
+		memo.Metadata.Status, memo.Metadata.Author, memo.Metadata.Source, memo.Metadata.Summary,
+		nowStr, nowStr,
+	)
+	if err != nil {
+		return fmt.Errorf("insert memo: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("get memo id: %w", err)
+	}
+	memo.ID = id
+	return nil
+}
+
+// GetMemo retrieves a memo by ID.
+func (s *Store) GetMemo(id int64) (*model.Memo, error) {
+	var m model.Memo
+	var tagsStr, createdAt, updatedAt string
+	err := s.db.QueryRow(
+		`SELECT id, title, content, tags, layer, note_id, status, author, source, summary, created_at, updated_at
+		 FROM memos WHERE id = ?`, id,
+	).Scan(&m.ID, &m.Title, &m.Content, &tagsStr, &m.Layer, &m.NoteID,
+		&m.Metadata.Status, &m.Metadata.Author, &m.Metadata.Source, &m.Metadata.Summary,
+		&createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("memo %d not found", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get memo %d: %w", id, err)
+	}
+	if err := json.Unmarshal([]byte(tagsStr), &m.Tags); err != nil {
+		return nil, fmt.Errorf("parse tags for memo %d: %w", id, err)
+	}
+	m.Metadata.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	m.Metadata.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return &m, nil
+}
+
+// UpdateMemo updates an existing memo, setting updated_at to now.
+func (s *Store) UpdateMemo(memo *model.Memo) error {
+	now := time.Now().UTC()
+	memo.Metadata.UpdatedAt = now
+	if memo.Tags == nil {
+		memo.Tags = []string{}
+	}
+
+	tagsJSON, err := json.Marshal(memo.Tags)
+	if err != nil {
+		return fmt.Errorf("marshal tags: %w", err)
+	}
+
+	result, err := s.db.Exec(
+		`UPDATE memos SET title=?, content=?, tags=?, layer=?, note_id=?, status=?, author=?, source=?, summary=?, updated_at=?
+		 WHERE id=?`,
+		memo.Title, memo.Content, string(tagsJSON), memo.Layer, memo.NoteID,
+		memo.Metadata.Status, memo.Metadata.Author, memo.Metadata.Source, memo.Metadata.Summary,
+		now.Format(time.RFC3339), memo.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update memo %d: %w", memo.ID, err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("memo %d not found", memo.ID)
+	}
+	return nil
+}
+
+// DeleteMemo moves a memo to the trash table as JSON, then deletes it.
+func (s *Store) DeleteMemo(id int64) error {
+	memo, err := s.GetMemo(id)
+	if err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(memo)
+	if err != nil {
+		return fmt.Errorf("marshal memo for trash: %w", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("INSERT INTO trash (id, original_data, deleted_at) VALUES (?, ?, ?)", id, string(data), now); err != nil {
+		return fmt.Errorf("insert trash: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM memos WHERE id = ?", id); err != nil {
+		return fmt.Errorf("delete memo: %w", err)
+	}
+	return tx.Commit()
+}
+
+// ListMemos returns memos for a given note ID. noteID=0 means global memos.
+func (s *Store) ListMemos(noteID int64) ([]*model.Memo, error) {
+	rows, err := s.db.Query(
+		`SELECT id, title, content, tags, layer, note_id, status, author, source, summary, created_at, updated_at
+		 FROM memos WHERE note_id = ? ORDER BY id`, noteID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list memos: %w", err)
+	}
+	defer rows.Close()
+	return scanMemos(rows)
+}
+
+// ListAllMemos returns all memos across all notes.
+func (s *Store) ListAllMemos() ([]*model.Memo, error) {
+	rows, err := s.db.Query(
+		`SELECT id, title, content, tags, layer, note_id, status, author, source, summary, created_at, updated_at
+		 FROM memos ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list all memos: %w", err)
+	}
+	defer rows.Close()
+	return scanMemos(rows)
+}
+
+// MoveMemo changes the note_id for a memo.
+func (s *Store) MoveMemo(memoID, targetNoteID int64) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.Exec("UPDATE memos SET note_id = ?, updated_at = ? WHERE id = ?", targetNoteID, now, memoID)
+	if err != nil {
+		return fmt.Errorf("move memo %d: %w", memoID, err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("memo %d not found", memoID)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+// SearchMemos performs FTS5 search with optional filtering.
+func (s *Store) SearchMemos(query string, opts SearchOptions) ([]*model.Memo, error) {
+	var args []interface{}
+	var conditions []string
+
+	// Base: join memos with FTS results.
+	baseQuery := `SELECT m.id, m.title, m.content, m.tags, m.layer, m.note_id,
+		m.status, m.author, m.source, m.summary, m.created_at, m.updated_at
+		FROM memos m`
+
+	hasFTS := query != ""
+	if hasFTS {
+		baseQuery += ` JOIN memos_fts f ON m.id = f.rowid`
+		conditions = append(conditions, "memos_fts MATCH ?")
+		args = append(args, query)
+	}
+
+	if opts.NoteID != 0 {
+		conditions = append(conditions, "m.note_id = ?")
+		args = append(args, opts.NoteID)
+	}
+	if opts.Layer != "" {
+		conditions = append(conditions, "m.layer = ?")
+		args = append(args, opts.Layer)
+	}
+	if opts.Status != "" {
+		conditions = append(conditions, "m.status = ?")
+		args = append(args, opts.Status)
+	}
+	if opts.Author != "" {
+		conditions = append(conditions, "m.author = ?")
+		args = append(args, opts.Author)
+	}
+	if !opts.CreatedAfter.IsZero() {
+		conditions = append(conditions, "m.created_at >= ?")
+		args = append(args, opts.CreatedAfter.Format(time.RFC3339))
+	}
+	if !opts.CreatedBefore.IsZero() {
+		conditions = append(conditions, "m.created_at <= ?")
+		args = append(args, opts.CreatedBefore.Format(time.RFC3339))
+	}
+	// Tag filtering: check if each tag exists in the JSON array.
+	for _, tag := range opts.Tags {
+		conditions = append(conditions, "m.tags LIKE ?")
+		args = append(args, "%"+tag+"%")
+	}
+
+	if len(conditions) > 0 {
+		baseQuery += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	// Sort order.
+	switch opts.Sort {
+	case "created":
+		baseQuery += " ORDER BY m.created_at DESC"
+	case "updated":
+		baseQuery += " ORDER BY m.updated_at DESC"
+	default:
+		if hasFTS {
+			baseQuery += " ORDER BY bm25(memos_fts)"
+		} else {
+			baseQuery += " ORDER BY m.id DESC"
+		}
+	}
+
+	if opts.Limit > 0 {
+		baseQuery += " LIMIT ?"
+		args = append(args, opts.Limit)
+	}
+
+	rows, err := s.db.Query(baseQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search memos: %w", err)
+	}
+	defer rows.Close()
+	return scanMemos(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Links
+// ---------------------------------------------------------------------------
+
+// AddLink inserts a single link (no bidirectional duplication).
+func (s *Store) AddLink(sourceID, targetID int64, relationType string, weight float64) error {
+	_, err := s.db.Exec(
+		"INSERT OR REPLACE INTO links (source_id, target_id, relation_type, weight) VALUES (?, ?, ?, ?)",
+		sourceID, targetID, relationType, weight,
+	)
+	if err != nil {
+		return fmt.Errorf("add link: %w", err)
+	}
+	return nil
+}
+
+// RemoveLink deletes a link.
+func (s *Store) RemoveLink(sourceID, targetID int64, relationType string) error {
+	result, err := s.db.Exec(
+		"DELETE FROM links WHERE source_id = ? AND target_id = ? AND relation_type = ?",
+		sourceID, targetID, relationType,
+	)
+	if err != nil {
+		return fmt.Errorf("remove link: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("link not found")
+	}
+	return nil
+}
+
+// ListLinks returns outgoing and incoming links for a memo.
+func (s *Store) ListLinks(memoID int64) (outgoing []model.Link, incoming []model.Link, err error) {
+	// Outgoing links.
+	rows, err := s.db.Query(
+		"SELECT source_id, target_id, relation_type, weight FROM links WHERE source_id = ?", memoID,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list outgoing links: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var l model.Link
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.RelationType, &l.Weight); err != nil {
+			return nil, nil, fmt.Errorf("scan outgoing link: %w", err)
+		}
+		outgoing = append(outgoing, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	// Incoming links.
+	rows2, err := s.db.Query(
+		"SELECT source_id, target_id, relation_type, weight FROM links WHERE target_id = ?", memoID,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list incoming links: %w", err)
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var l model.Link
+		if err := rows2.Scan(&l.SourceID, &l.TargetID, &l.RelationType, &l.Weight); err != nil {
+			return nil, nil, fmt.Errorf("scan incoming link: %w", err)
+		}
+		incoming = append(incoming, l)
+	}
+	return outgoing, incoming, rows2.Err()
+}
+
+// ListLinksBFS performs a breadth-first traversal from a memo up to the given depth.
+func (s *Store) ListLinksBFS(memoID int64, depth int) ([]LinkWithDepth, error) {
+	if depth <= 0 {
+		return nil, nil
+	}
+
+	visited := map[int64]bool{memoID: true}
+	queue := []struct {
+		id    int64
+		depth int
+	}{{memoID, 0}}
+
+	var result []LinkWithDepth
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if current.depth >= depth {
+			continue
+		}
+
+		// Get all links where current node is source or target.
+		rows, err := s.db.Query(
+			"SELECT source_id, target_id, relation_type, weight FROM links WHERE source_id = ? OR target_id = ?",
+			current.id, current.id,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("bfs query: %w", err)
+		}
+
+		var links []model.Link
+		for rows.Next() {
+			var l model.Link
+			if err := rows.Scan(&l.SourceID, &l.TargetID, &l.RelationType, &l.Weight); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("bfs scan: %w", err)
+			}
+			links = append(links, l)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+
+		for _, l := range links {
+			// Determine the neighbor node.
+			neighbor := l.TargetID
+			if neighbor == current.id {
+				neighbor = l.SourceID
+			}
+			// Only include this link if it leads to a new or unvisited node.
+			if !visited[neighbor] {
+				result = append(result, LinkWithDepth{Link: l, Depth: current.depth + 1})
+				visited[neighbor] = true
+				queue = append(queue, struct {
+					id    int64
+					depth int
+				}{neighbor, current.depth + 1})
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-// LoadConfig reads and parses config.yaml from the store root.
+// LoadConfig reads configuration from the config table.
 func (s *Store) LoadConfig() (*model.Config, error) {
-	data, err := os.ReadFile(filepath.Join(s.rootPath, "config.yaml"))
+	cfg := model.DefaultConfig()
+	rows, err := s.db.Query("SELECT key, value FROM config")
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		return nil, fmt.Errorf("load config: %w", err)
 	}
-	var cfg model.Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, fmt.Errorf("scan config: %w", err)
+		}
+		switch key {
+		case "store_path":
+			cfg.StorePath = value
+		case "default_note":
+			cfg.DefaultNote = value
+		case "default_format":
+			cfg.DefaultFormat = value
+		case "default_author":
+			cfg.DefaultAuthor = value
+		case "custom_relation_types":
+			if value != "" {
+				var types []string
+				if err := json.Unmarshal([]byte(value), &types); err == nil {
+					cfg.CustomRelationTypes = types
+				}
+			}
+		}
 	}
-	return &cfg, nil
+	return cfg, rows.Err()
 }
 
-// SaveConfig writes the given Config as config.yaml in the store root.
+// SaveConfig upserts configuration into the config table.
 func (s *Store) SaveConfig(cfg *model.Config) error {
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
+	pairs := map[string]string{
+		"store_path":     cfg.StorePath,
+		"default_note":   cfg.DefaultNote,
+		"default_format": cfg.DefaultFormat,
+		"default_author": cfg.DefaultAuthor,
 	}
-	return s.atomicWriteFile(filepath.Join(s.rootPath, "config.yaml"), data)
-}
 
-// ---------------------------------------------------------------------------
-// Projects
-// ---------------------------------------------------------------------------
-
-// CreateProject persists a new project to disk.
-func (s *Store) CreateProject(p *model.Project) error {
-	if err := sanitizeID(p.ID); err != nil {
-		return err
-	}
-	dir := filepath.Join(s.rootPath, "projects", p.ID)
-	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0755); err != nil {
-		return fmt.Errorf("create project dirs: %w", err)
-	}
-	data, err := yaml.Marshal(p)
+	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("marshal project: %w", err)
+		return fmt.Errorf("begin tx: %w", err)
 	}
-	return s.atomicWriteFile(filepath.Join(dir, "project.yaml"), data)
-}
+	defer tx.Rollback()
 
-// ListProjects returns all projects found under the projects/ directory.
-func (s *Store) ListProjects() ([]*model.Project, error) {
-	projectsDir := filepath.Join(s.rootPath, "projects")
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	for k, v := range pairs {
+		if _, err := tx.Exec(
+			"INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+			k, v,
+		); err != nil {
+			return fmt.Errorf("save config %q: %w", k, err)
 		}
-		return nil, fmt.Errorf("read projects dir: %w", err)
 	}
 
-	var projects []*model.Project
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		p, err := s.GetProject(e.Name())
+	if cfg.CustomRelationTypes != nil {
+		typesJSON, err := json.Marshal(cfg.CustomRelationTypes)
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("marshal custom relation types: %w", err)
 		}
-		projects = append(projects, p)
-	}
-	return projects, nil
-}
-
-// GetProject reads a single project by its ID.
-func (s *Store) GetProject(id string) (*model.Project, error) {
-	if err := sanitizeID(id); err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(filepath.Join(s.rootPath, "projects", id, "project.yaml"))
-	if err != nil {
-		return nil, fmt.Errorf("read project %s: %w", id, err)
-	}
-	var p model.Project
-	if err := yaml.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("parse project %s: %w", id, err)
-	}
-	return &p, nil
-}
-
-// DeleteProject removes a project directory and all its notes.
-func (s *Store) DeleteProject(id string) error {
-	if err := sanitizeID(id); err != nil {
-		return err
-	}
-	dir := filepath.Join(s.rootPath, "projects", id)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("project %s not found", id)
-	}
-	return os.RemoveAll(dir)
-}
-
-// ---------------------------------------------------------------------------
-// Notes
-// ---------------------------------------------------------------------------
-
-// CreateNote writes a new note to disk in the appropriate directory.
-func (s *Store) CreateNote(note *model.Note) error {
-	if err := sanitizeID(note.ID); err != nil {
-		return err
-	}
-	if note.ProjectID != "" {
-		if err := sanitizeID(note.ProjectID); err != nil {
-			return err
+		if _, err := tx.Exec(
+			"INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+			"custom_relation_types", string(typesJSON),
+		); err != nil {
+			return fmt.Errorf("save config custom_relation_types: %w", err)
 		}
 	}
-	dir := s.notesDir(note.ProjectID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create notes dir: %w", err)
-	}
-	data, err := s.marshalNote(note)
-	if err != nil {
-		return err
-	}
-	return s.atomicWriteFile(s.noteFilePath(note.ProjectID, note.ID), data)
-}
 
-// GetNote reads a single note by project and note ID.
-// Pass an empty projectID for global notes.
-func (s *Store) GetNote(projectID, noteID string) (*model.Note, error) {
-	if err := sanitizeID(noteID); err != nil {
-		return nil, err
-	}
-	if projectID != "" {
-		if err := sanitizeID(projectID); err != nil {
-			return nil, err
-		}
-	}
-	data, err := os.ReadFile(s.noteFilePath(projectID, noteID))
-	if err != nil {
-		return nil, fmt.Errorf("read note %s: %w", noteID, err)
-	}
-	return s.unmarshalNote(data)
-}
-
-// UpdateNote overwrites an existing note on disk, automatically setting UpdatedAt.
-func (s *Store) UpdateNote(note *model.Note) error {
-	note.Metadata.UpdatedAt = time.Now()
-	data, err := s.marshalNote(note)
-	if err != nil {
-		return err
-	}
-	path := s.noteFilePath(note.ProjectID, note.ID)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return fmt.Errorf("note %s not found", note.ID)
-	}
-	return s.atomicWriteFile(path, data)
-}
-
-// DeleteNote moves a note file to the trash directory instead of permanently removing it.
-func (s *Store) DeleteNote(projectID, noteID string) error {
-	if err := sanitizeID(noteID); err != nil {
-		return err
-	}
-	if projectID != "" {
-		if err := sanitizeID(projectID); err != nil {
-			return err
-		}
-	}
-	path := s.noteFilePath(projectID, noteID)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return fmt.Errorf("note %s not found", noteID)
-	}
-	trashDir := filepath.Join(s.rootPath, "trash")
-	if err := os.MkdirAll(trashDir, 0755); err != nil {
-		return fmt.Errorf("create trash dir: %w", err)
-	}
-	trashName := fmt.Sprintf("%s_%d.md", noteID, time.Now().Unix())
-	return os.Rename(path, filepath.Join(trashDir, trashName))
-}
-
-// ListNotes returns all notes in a project. Pass an empty projectID for global notes.
-func (s *Store) ListNotes(projectID string) ([]*model.Note, error) {
-	dir := s.notesDir(projectID)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read notes dir: %w", err)
-	}
-
-	var notes []*model.Note
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		noteID := strings.TrimSuffix(e.Name(), ".md")
-		n, err := s.GetNote(projectID, noteID)
-		if err != nil {
-			return nil, err
-		}
-		notes = append(notes, n)
-	}
-	return notes, nil
-}
-
-// ListNotesPartial works like ListNotes but collects parse errors instead of
-// aborting. Notes that fail to parse are reported in the returned []NoteError
-// slice while successfully parsed notes are still returned.
-func (s *Store) ListNotesPartial(projectID string) ([]*model.Note, []NoteError) {
-	dir := s.notesDir(projectID)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, []NoteError{{FilePath: dir, Err: fmt.Errorf("read notes dir: %w", err)}}
-	}
-
-	var notes []*model.Note
-	var noteErrors []NoteError
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		noteID := strings.TrimSuffix(e.Name(), ".md")
-		n, err := s.GetNote(projectID, noteID)
-		if err != nil {
-			noteErrors = append(noteErrors, NoteError{
-				FilePath: s.noteFilePath(projectID, noteID),
-				Err:      err,
-			})
-			continue
-		}
-		notes = append(notes, n)
-	}
-	return notes, noteErrors
-}
-
-// MoveNote moves a note from one project to another.
-// Pass empty string for global project scope.
-func (s *Store) MoveNote(noteID, fromProject, toProject string) error {
-	if err := sanitizeID(noteID); err != nil {
-		return err
-	}
-	note, err := s.GetNote(fromProject, noteID)
-	if err != nil {
-		return fmt.Errorf("source note %s not found in project %q: %w", noteID, fromProject, err)
-	}
-
-	note.ProjectID = toProject
-	note.Metadata.UpdatedAt = time.Now()
-
-	destDir := s.notesDir(toProject)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("create destination notes dir: %w", err)
-	}
-
-	data, err := s.marshalNote(note)
-	if err != nil {
-		return err
-	}
-
-	destPath := s.noteFilePath(toProject, noteID)
-	if err := s.atomicWriteFile(destPath, data); err != nil {
-		return err
-	}
-
-	srcPath := s.noteFilePath(fromProject, noteID)
-	if err := os.Remove(srcPath); err != nil {
-		os.Remove(destPath) // rollback: remove destination copy
-		return fmt.Errorf("move failed (rolled back): %w", err)
-	}
-	return nil
+	return tx.Commit()
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// sanitizeID validates that an ID does not contain path traversal characters.
-func sanitizeID(id string) error {
-	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
-		return fmt.Errorf("invalid ID %q: contains path separator or traversal sequence", id)
-	}
-	return nil
-}
-
-// notesDir returns the notes directory for a project, or global if projectID is empty.
-func (s *Store) notesDir(projectID string) string {
-	if projectID == "" {
-		return filepath.Join(s.rootPath, "global", "notes")
-	}
-	return filepath.Join(s.rootPath, "projects", projectID, "notes")
-}
-
-// noteFilePath returns the full file path for a note's markdown file.
-func (s *Store) noteFilePath(projectID, noteID string) string {
-	return filepath.Join(s.notesDir(projectID), noteID+".md")
-}
-
-// marshalNote converts a Note into Markdown with YAML frontmatter.
-func (s *Store) marshalNote(note *model.Note) ([]byte, error) {
-	fm := model.NoteFrontmatter{
-		ID:        note.ID,
-		Title:     note.Title,
-		Tags:      note.Tags,
-		Links:     note.Links,
-		Metadata:  note.Metadata,
-		ProjectID: note.ProjectID,
-		Layer:     note.Layer,
-	}
-	yamlData, err := yaml.Marshal(&fm)
-	if err != nil {
-		return nil, fmt.Errorf("marshal note frontmatter: %w", err)
-	}
-
-	var buf strings.Builder
-	buf.WriteString("---\n")
-	buf.Write(yamlData)
-	buf.WriteString("---\n")
-	buf.WriteString(note.Content)
-
-	return []byte(buf.String()), nil
-}
-
-// atomicWriteFile writes data to a temp file then renames it to the target path.
-// If the write or rename fails, the temp file is cleaned up and no partial data
-// is left at the target path.
-func (s *Store) atomicWriteFile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, ".zk-tmp-*")
-	if err != nil {
-		return fmt.Errorf("write failed: %v (no changes made, safe to retry)", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("write failed: %v (no changes made, safe to retry)", err)
-	}
-	tmpFile.Close()
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("write failed: %v (no changes made, safe to retry)", err)
-	}
-	return nil
-}
-
-// unmarshalNote parses Markdown with YAML frontmatter into a Note.
-func (s *Store) unmarshalNote(data []byte) (*model.Note, error) {
-	content := string(data)
-
-	// Strip leading "---\n"
-	if !strings.HasPrefix(content, "---\n") {
-		return nil, fmt.Errorf("invalid note format: missing opening frontmatter delimiter")
-	}
-	content = content[4:] // skip "---\n"
-
-	// Find closing delimiter by scanning lines: a line that is exactly "---".
-	var yamlPart, bodyPart string
-	rest := content
-	found := false
-	for {
-		nlIdx := strings.Index(rest, "\n")
-		if nlIdx == -1 {
-			// Last line without trailing newline.
-			if rest == "---" {
-				found = true
-				bodyPart = ""
-			}
-			break
+// scanMemos scans rows into a slice of Memo pointers.
+func scanMemos(rows *sql.Rows) ([]*model.Memo, error) {
+	var memos []*model.Memo
+	for rows.Next() {
+		var m model.Memo
+		var tagsStr, createdAt, updatedAt string
+		if err := rows.Scan(
+			&m.ID, &m.Title, &m.Content, &tagsStr, &m.Layer, &m.NoteID,
+			&m.Metadata.Status, &m.Metadata.Author, &m.Metadata.Source, &m.Metadata.Summary,
+			&createdAt, &updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan memo: %w", err)
 		}
-		line := rest[:nlIdx]
-		if line == "---" {
-			found = true
-			bodyPart = rest[nlIdx+1:]
-			break
+		if err := json.Unmarshal([]byte(tagsStr), &m.Tags); err != nil {
+			return nil, fmt.Errorf("parse tags: %w", err)
 		}
-		yamlPart += line + "\n"
-		rest = rest[nlIdx+1:]
+		m.Metadata.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		m.Metadata.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		memos = append(memos, &m)
 	}
-	if !found {
-		return nil, fmt.Errorf("invalid note format: missing closing frontmatter delimiter")
-	}
-
-	var fm model.NoteFrontmatter
-	if err := yaml.Unmarshal([]byte(yamlPart), &fm); err != nil {
-		return nil, fmt.Errorf("parse note frontmatter: %w", err)
-	}
-
-	note := &model.Note{
-		ID:        fm.ID,
-		Title:     fm.Title,
-		Content:   bodyPart,
-		Tags:      fm.Tags,
-		Links:     fm.Links,
-		Metadata:  fm.Metadata,
-		ProjectID: fm.ProjectID,
-		Layer:     fm.Layer,
-	}
-	return note, nil
+	return memos, rows.Err()
 }

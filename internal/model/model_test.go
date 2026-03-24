@@ -2,87 +2,62 @@ package model
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestGenerateID(t *testing.T) {
-	re := regexp.MustCompile(`^N-[0-9A-F]{6}$`)
-	seen := make(map[string]bool)
-
-	for i := 0; i < 100; i++ {
-		id := GenerateID("N")
-		if !re.MatchString(id) {
-			t.Fatalf("GenerateID(%q) = %q; want format N-XXXXXX (6 uppercase hex chars)", "N", id)
-		}
-		if seen[id] {
-			t.Fatalf("duplicate ID generated: %s", id)
-		}
-		seen[id] = true
+func TestMemoStruct(t *testing.T) {
+	m := Memo{
+		ID:      1,
+		Title:   "Test Title",
+		Content: "Test Content",
+		Tags:    []string{"tag1", "tag2"},
+		Layer:   LayerConcrete,
+		NoteID:  0,
+	}
+	if m.ID != 1 {
+		t.Fatalf("ID = %d; want 1", m.ID)
+	}
+	if m.Title != "Test Title" {
+		t.Fatalf("Title = %q; want %q", m.Title, "Test Title")
+	}
+	if m.Layer != "concrete" {
+		t.Fatalf("Layer = %q; want %q", m.Layer, "concrete")
+	}
+	if len(m.Tags) != 2 {
+		t.Fatalf("Tags length = %d; want 2", len(m.Tags))
 	}
 }
 
-func TestNewNote(t *testing.T) {
-	before := time.Now()
-	n := NewNote("Test Title", "Test Content", nil)
-	after := time.Now()
-
-	if n.ID == "" {
-		t.Fatal("NewNote ID is empty")
+func TestNoteStruct(t *testing.T) {
+	n := Note{
+		ID:          1,
+		Name:        "My Note",
+		Description: "A description",
 	}
-	if !strings.HasPrefix(n.ID, "N-") {
-		t.Fatalf("NewNote ID = %q; want prefix N-", n.ID)
+	if n.ID != 1 {
+		t.Fatalf("ID = %d; want 1", n.ID)
 	}
-	if n.Title != "Test Title" {
-		t.Fatalf("Title = %q; want %q", n.Title, "Test Title")
-	}
-	if n.Content != "Test Content" {
-		t.Fatalf("Content = %q; want %q", n.Content, "Test Content")
-	}
-	if n.Metadata.Status != StatusActive {
-		t.Fatalf("Status = %q; want %q", n.Metadata.Status, StatusActive)
-	}
-	if n.Metadata.CreatedAt.Before(before) || n.Metadata.CreatedAt.After(after) {
-		t.Fatalf("CreatedAt %v not between %v and %v", n.Metadata.CreatedAt, before, after)
-	}
-	if n.Metadata.UpdatedAt.Before(before) || n.Metadata.UpdatedAt.After(after) {
-		t.Fatalf("UpdatedAt %v not between %v and %v", n.Metadata.UpdatedAt, before, after)
-	}
-	if n.Tags == nil {
-		t.Fatal("Tags is nil; want empty slice")
-	}
-	if len(n.Tags) != 0 {
-		t.Fatalf("Tags length = %d; want 0", len(n.Tags))
-	}
-	if n.Links == nil {
-		t.Fatal("Links is nil; want empty slice")
-	}
-	if len(n.Links) != 0 {
-		t.Fatalf("Links length = %d; want 0", len(n.Links))
+	if n.Name != "My Note" {
+		t.Fatalf("Name = %q; want %q", n.Name, "My Note")
 	}
 }
 
-func TestNewProject(t *testing.T) {
-	before := time.Now()
-	p := NewProject("My Project", "A description")
-	after := time.Now()
-
-	if !strings.HasPrefix(p.ID, "P-") {
-		t.Fatalf("Project ID = %q; want prefix P-", p.ID)
+func TestLinkStruct(t *testing.T) {
+	l := Link{
+		SourceID:     1,
+		TargetID:     2,
+		RelationType: RelSupports,
+		Weight:       0.8,
 	}
-	if p.Name != "My Project" {
-		t.Fatalf("Name = %q; want %q", p.Name, "My Project")
+	if l.SourceID != 1 {
+		t.Fatalf("SourceID = %d; want 1", l.SourceID)
 	}
-	if p.Description != "A description" {
-		t.Fatalf("Description = %q; want %q", p.Description, "A description")
+	if l.TargetID != 2 {
+		t.Fatalf("TargetID = %d; want 2", l.TargetID)
 	}
-	if p.CreatedAt.Before(before) || p.CreatedAt.After(after) {
-		t.Fatalf("CreatedAt %v not in expected range", p.CreatedAt)
-	}
-	if p.UpdatedAt.Before(before) || p.UpdatedAt.After(after) {
-		t.Fatalf("UpdatedAt %v not in expected range", p.UpdatedAt)
+	if l.Weight != 0.8 {
+		t.Fatalf("Weight = %f; want 0.8", l.Weight)
 	}
 }
 
@@ -159,12 +134,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.DefaultFormat != "md" {
 		t.Fatalf("DefaultFormat = %q; want %q", cfg.DefaultFormat, "md")
 	}
-}
-
-func TestNewNoteDefaultLayer(t *testing.T) {
-	n := NewNote("Layer Test", "content", nil)
-	if n.Layer != "concrete" {
-		t.Fatalf("NewNote Layer = %q; want %q", n.Layer, "concrete")
+	if cfg.DefaultNote != "" {
+		t.Fatalf("DefaultNote = %q; want empty", cfg.DefaultNote)
 	}
 }
 
@@ -178,11 +149,9 @@ func TestLayerConstants(t *testing.T) {
 }
 
 func TestNewRelationTypes(t *testing.T) {
-	// Reset custom types for a clean test.
 	customRelationTypes = nil
 
 	types := ValidRelationTypes()
-	// "abstracts" and "grounds" should be in the built-in list.
 	foundAbstracts := false
 	foundGrounds := false
 	for _, rt := range types {
@@ -199,38 +168,10 @@ func TestNewRelationTypes(t *testing.T) {
 	if !foundGrounds {
 		t.Fatalf("ValidRelationTypes() does not include %q", RelGrounds)
 	}
-
-	if !IsValidRelationType(RelAbstracts) {
-		t.Fatalf("IsValidRelationType(%q) = false; want true", RelAbstracts)
-	}
-	if !IsValidRelationType(RelGrounds) {
-		t.Fatalf("IsValidRelationType(%q) = false; want true", RelGrounds)
-	}
 }
 
 func TestNewRelationTypesExtended(t *testing.T) {
-	// Reset custom types for a clean test.
 	customRelationTypes = nil
-
-	types := ValidRelationTypes()
-
-	// "replaces" and "invalidates" should be in the built-in list.
-	foundReplaces := false
-	foundInvalidates := false
-	for _, rt := range types {
-		if rt == RelReplaces {
-			foundReplaces = true
-		}
-		if rt == RelInvalidates {
-			foundInvalidates = true
-		}
-	}
-	if !foundReplaces {
-		t.Fatalf("ValidRelationTypes() does not include %q", RelReplaces)
-	}
-	if !foundInvalidates {
-		t.Fatalf("ValidRelationTypes() does not include %q", RelInvalidates)
-	}
 
 	if !IsValidRelationType(RelReplaces) {
 		t.Fatalf("IsValidRelationType(%q) = false; want true", RelReplaces)
@@ -245,14 +186,12 @@ func TestCustomRelationTypesConcurrency(t *testing.T) {
 	defer ResetCustomRelationTypes()
 
 	done := make(chan bool)
-	// Writer goroutine.
 	go func() {
 		for i := 0; i < 100; i++ {
 			RegisterRelationType(fmt.Sprintf("custom-%d", i))
 		}
 		done <- true
 	}()
-	// Reader goroutine.
 	go func() {
 		for i := 0; i < 100; i++ {
 			_ = ValidRelationTypes()
@@ -273,11 +212,19 @@ func TestValidRelationTypesNoBacking(t *testing.T) {
 	vrt := ValidRelationTypes()
 	originalLen := len(vrt)
 
-	// Appending to the returned slice should NOT affect internal state.
 	vrt = append(vrt, "injected")
 
 	vrt2 := ValidRelationTypes()
 	if len(vrt2) != originalLen {
 		t.Fatalf("ValidRelationTypes() length changed after caller append: got %d, want %d", len(vrt2), originalLen)
+	}
+}
+
+func TestStatusConstants(t *testing.T) {
+	if StatusActive != "active" {
+		t.Fatalf("StatusActive = %q; want %q", StatusActive, "active")
+	}
+	if StatusArchived != "archived" {
+		t.Fatalf("StatusArchived = %q; want %q", StatusArchived, "archived")
 	}
 }

@@ -1,14 +1,10 @@
 package model
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Relation type constants.
@@ -21,8 +17,8 @@ const (
 	RelExampleOf   = "example-of"
 	RelAbstracts   = "abstracts"
 	RelGrounds     = "grounds"
-	RelReplaces    = "replaces"     // new note supersedes old one
-	RelInvalidates = "invalidates"  // data disproves a hypothesis
+	RelReplaces    = "replaces"
+	RelInvalidates = "invalidates"
 )
 
 // Layer constants.
@@ -31,110 +27,57 @@ const (
 	LayerAbstract = "abstract"
 )
 
-// Note status constants.
+// Memo status constants.
 const (
 	StatusActive   = "active"
 	StatusArchived = "archived"
 )
 
-// Note represents an atomic memory note in the Zettelkasten.
+// Memo represents an atomic memory record in the Zettelkasten.
+type Memo struct {
+	ID       int64    `json:"id"`
+	Title    string   `json:"title"`
+	Content  string   `json:"content"`
+	Tags     []string `json:"tags"`
+	Layer    string   `json:"layer"`
+	NoteID   int64    `json:"note_id"`
+	Metadata Metadata `json:"metadata"`
+}
+
+// Note groups related memos together (formerly Project).
 type Note struct {
-	ID        string   `yaml:"id"        json:"id"`
-	Title     string   `yaml:"title"     json:"title"`
-	Content   string   `yaml:"-"         json:"-"`
-	Tags      []string `yaml:"tags"      json:"tags"`
-	Links     []Link   `yaml:"links"     json:"links"`
-	Metadata  Metadata `yaml:"metadata"  json:"metadata"`
-	ProjectID string   `yaml:"project_id,omitempty" json:"project_id,omitempty"`
-	Layer     string   `yaml:"layer,omitempty"      json:"layer,omitempty"`
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// NoteFrontmatter is the YAML-serializable portion of a Note (without Content).
-type NoteFrontmatter struct {
-	ID        string   `yaml:"id"        json:"id"`
-	Title     string   `yaml:"title"     json:"title"`
-	Tags      []string `yaml:"tags"      json:"tags"`
-	Links     []Link   `yaml:"links"     json:"links"`
-	Metadata  Metadata `yaml:"metadata"  json:"metadata"`
-	ProjectID string   `yaml:"project_id,omitempty" json:"project_id,omitempty"`
-	Layer     string   `yaml:"layer,omitempty"      json:"layer,omitempty"`
-}
-
-// Link represents a weighted, typed connection between notes.
+// Link represents a weighted, typed connection between memos.
 type Link struct {
-	TargetID     string  `yaml:"target_id"     json:"target_id"`
-	RelationType string  `yaml:"relation_type" json:"relation_type"`
-	Weight       float64 `yaml:"weight"        json:"weight"`
+	SourceID     int64   `json:"source_id"`
+	TargetID     int64   `json:"target_id"`
+	RelationType string  `json:"relation_type"`
+	Weight       float64 `json:"weight"`
 }
 
-// Metadata holds auto-recorded metadata for a note.
+// Metadata holds auto-recorded metadata for a memo.
 type Metadata struct {
-	CreatedAt time.Time `yaml:"created_at" json:"created_at"`
-	UpdatedAt time.Time `yaml:"updated_at" json:"updated_at"`
-	Source    string    `yaml:"source"     json:"source"`
-	Status   string    `yaml:"status"     json:"status"`
-	Summary  string    `yaml:"summary,omitempty" json:"summary,omitempty"`
-	Author   string    `yaml:"author,omitempty"  json:"author,omitempty"`
-}
-
-// Project groups related notes together.
-type Project struct {
-	ID          string    `yaml:"id"          json:"id"`
-	Name        string    `yaml:"name"        json:"name"`
-	Description string    `yaml:"description" json:"description"`
-	CreatedAt   time.Time `yaml:"created_at"  json:"created_at"`
-	UpdatedAt   time.Time `yaml:"updated_at"  json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Source    string    `json:"source"`
+	Status    string    `json:"status"`
+	Summary   string    `json:"summary,omitempty"`
+	Author    string    `json:"author,omitempty"`
 }
 
 // Config holds CLI configuration.
 type Config struct {
-	StorePath           string   `yaml:"store_path"      json:"store_path"`
-	DefaultProject      string   `yaml:"default_project" json:"default_project"`
-	DefaultFormat       string   `yaml:"default_format"  json:"default_format"`
-	DefaultAuthor       string   `yaml:"default_author,omitempty" json:"default_author,omitempty"`
-	CustomRelationTypes []string `yaml:"custom_relation_types,omitempty" json:"custom_relation_types,omitempty"`
-}
-
-// GenerateID produces an ID like "N-ABCDEF" using the given prefix
-// and 6 uppercase alphanumeric characters derived from a UUID.
-func GenerateID(prefix string) string {
-	raw := uuid.New().String()
-	clean := strings.ReplaceAll(raw, "-", "")
-	upper := strings.ToUpper(clean)
-	return fmt.Sprintf("%s-%s", prefix, upper[:6])
-}
-
-// NewNote creates a new Note with an auto-generated ID, timestamps, and active status.
-func NewNote(title, content string, tags []string) *Note {
-	now := time.Now()
-	if tags == nil {
-		tags = []string{}
-	}
-	return &Note{
-		ID:      GenerateID("N"),
-		Title:   title,
-		Content: content,
-		Tags:    tags,
-		Links:   []Link{},
-		Layer:   LayerConcrete,
-		Metadata: Metadata{
-			CreatedAt: now,
-			UpdatedAt: now,
-			Status:    StatusActive,
-		},
-	}
-}
-
-// NewProject creates a new Project with an auto-generated ID and timestamps.
-func NewProject(name, description string) *Project {
-	now := time.Now()
-	return &Project{
-		ID:          GenerateID("P"),
-		Name:        name,
-		Description: description,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
+	StorePath           string   `json:"store_path"`
+	DefaultNote         string   `json:"default_note"`
+	DefaultFormat       string   `json:"default_format"`
+	DefaultAuthor       string   `json:"default_author,omitempty"`
+	CustomRelationTypes []string `json:"custom_relation_types,omitempty"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -146,7 +89,7 @@ func DefaultConfig() *Config {
 	}
 	return &Config{
 		StorePath:     filepath.Join(home, ".zk-memory"),
-		DefaultProject: "",
+		DefaultNote:   "",
 		DefaultFormat: "md",
 	}
 }
