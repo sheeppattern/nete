@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -389,6 +390,36 @@ func (s *Store) ListAllMemos() ([]*model.Memo, error) {
 	return scanMemos(rows)
 }
 
+// ListRecentMemos returns memos created or updated since the given time.
+// If noteID is non-zero, filters to that note. If byUpdated is true, uses updated_at.
+func (s *Store) ListRecentMemos(since time.Time, noteID int64, byUpdated bool) ([]*model.Memo, error) {
+	timeCol := "created_at"
+	orderCol := "created_at"
+	if byUpdated {
+		timeCol = "updated_at"
+		orderCol = "updated_at"
+	}
+
+	query := fmt.Sprintf(
+		`SELECT id, title, content, tags, layer, note_id, status, author, source, summary, created_at, updated_at
+		 FROM memos WHERE %s >= ?`, timeCol)
+	args := []interface{}{since.Format(time.RFC3339)}
+
+	if noteID != 0 {
+		query += " AND note_id = ?"
+		args = append(args, noteID)
+	}
+
+	query += fmt.Sprintf(" ORDER BY %s DESC", orderCol)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list recent memos: %w", err)
+	}
+	defer rows.Close()
+	return scanMemos(rows)
+}
+
 // MoveMemo changes the note_id for a memo.
 func (s *Store) MoveMemo(memoID, targetNoteID int64) error {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -408,9 +439,19 @@ func (s *Store) MoveMemo(memoID, targetNoteID int64) error {
 // ---------------------------------------------------------------------------
 
 // SearchMemos performs FTS5 search with optional filtering.
+// If query is a pure integer, it also matches memo ID directly.
 func (s *Store) SearchMemos(query string, opts SearchOptions) ([]*model.Memo, error) {
 	var args []interface{}
 	var conditions []string
+
+	// Check if query is a numeric ID.
+	queryID, isNumericQuery := int64(0), false
+	if query != "" {
+		if id, err := strconv.ParseInt(strings.TrimSpace(query), 10, 64); err == nil && id > 0 {
+			queryID = id
+			isNumericQuery = true
+		}
+	}
 
 	// Base: join memos with FTS results.
 	baseQuery := `SELECT m.id, m.title, m.content, m.tags, m.layer, m.note_id,
@@ -447,8 +488,10 @@ func (s *Store) SearchMemos(query string, opts SearchOptions) ([]*model.Memo, er
 		args = append(args, opts.CreatedAfter.Format(time.RFC3339))
 	}
 	if !opts.CreatedBefore.IsZero() {
-		conditions = append(conditions, "m.created_at <= ?")
-		args = append(args, opts.CreatedBefore.Format(time.RFC3339))
+		// Add 24 hours so "created-before 2026-01-15" includes the entire day.
+		endOfDay := opts.CreatedBefore.Add(24 * time.Hour)
+		conditions = append(conditions, "m.created_at < ?")
+		args = append(args, endOfDay.Format(time.RFC3339))
 	}
 	// Tag filtering: exact match via json_each().
 	for _, tag := range opts.Tags {
@@ -484,7 +527,29 @@ func (s *Store) SearchMemos(query string, opts SearchOptions) ([]*model.Memo, er
 		return nil, fmt.Errorf("search memos: %w", err)
 	}
 	defer rows.Close()
-	return scanMemos(rows)
+	results, err := scanMemos(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// If query is a numeric ID, prepend the matching memo if not already in results.
+	if isNumericQuery {
+		memo, mErr := s.GetMemo(queryID)
+		if mErr == nil {
+			found := false
+			for _, r := range results {
+				if r.ID == queryID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				results = append([]*model.Memo{memo}, results...)
+			}
+		}
+	}
+
+	return results, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -556,6 +621,29 @@ func (s *Store) ListLinks(memoID int64) (outgoing []model.Link, incoming []model
 		incoming = append(incoming, l)
 	}
 	return outgoing, incoming, rows2.Err()
+}
+
+// ListAllLinks returns all links in a single query, grouped by memo ID.
+// Returns outgoing and incoming maps keyed by memo ID.
+func (s *Store) ListAllLinks() (outgoing map[int64][]model.Link, incoming map[int64][]model.Link, err error) {
+	outgoing = make(map[int64][]model.Link)
+	incoming = make(map[int64][]model.Link)
+
+	rows, err := s.db.Query("SELECT source_id, target_id, relation_type, weight FROM links")
+	if err != nil {
+		return nil, nil, fmt.Errorf("list all links: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var l model.Link
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.RelationType, &l.Weight); err != nil {
+			return nil, nil, fmt.Errorf("scan link: %w", err)
+		}
+		outgoing[l.SourceID] = append(outgoing[l.SourceID], l)
+		incoming[l.TargetID] = append(incoming[l.TargetID], l)
+	}
+	return outgoing, incoming, rows.Err()
 }
 
 // maxBFSDepth is the hard cap on BFS traversal depth.

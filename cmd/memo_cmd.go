@@ -4,7 +4,10 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/sheeppattern/nete/internal/model"
@@ -282,7 +285,86 @@ var memoRandomCmd = &cobra.Command{
 	},
 }
 
+var memoTimelineCmd = &cobra.Command{
+	Use:   "timeline",
+	Short: "Show recently created or updated memos in chronological order",
+	Example: `  nete memo timeline
+  nete memo timeline --days 7
+  nete memo timeline --days 30 --note 1
+  nete memo timeline --updated`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		days, _ := cmd.Flags().GetInt("days")
+		showUpdated, _ := cmd.Flags().GetBool("updated")
+
+		s, err := openStore(cmd)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+
+		since := time.Now().AddDate(0, 0, -days)
+		memos, err := s.ListRecentMemos(since, flagNote, showUpdated)
+		if err != nil {
+			return fmt.Errorf("timeline: %w", err)
+		}
+
+		if len(memos) == 0 {
+			statusf("No memos found in the last %d day(s)", days)
+			return nil
+		}
+
+		f := getFormatter()
+		switch f.Format {
+		case "md":
+			return printTimelineMD(memos, days, showUpdated)
+		default:
+			return f.PrintMemos(memos)
+		}
+	},
+}
+
+func printTimelineMD(memos []*model.Memo, days int, showUpdated bool) error {
+	var b strings.Builder
+
+	label := "created"
+	if showUpdated {
+		label = "updated"
+	}
+	fmt.Fprintf(&b, "# Timeline — last %d day(s) by %s\n\n", days, label)
+
+	currentDate := ""
+	for _, m := range memos {
+		var ts time.Time
+		if showUpdated {
+			ts = m.Metadata.UpdatedAt
+		} else {
+			ts = m.Metadata.CreatedAt
+		}
+		date := ts.Format("2006-01-02")
+		if date != currentDate {
+			if currentDate != "" {
+				fmt.Fprintln(&b)
+			}
+			fmt.Fprintf(&b, "## %s\n\n", date)
+			currentDate = date
+		}
+		timeStr := ts.Format("15:04")
+		tags := ""
+		if len(m.Tags) > 0 {
+			tags = " [" + strings.Join(m.Tags, ", ") + "]"
+		}
+		fmt.Fprintf(&b, "- **%s** %s (#%d, %s)%s\n", timeStr, m.Title, m.ID, m.Layer, tags)
+	}
+
+	_, err := fmt.Fprint(os.Stdout, b.String())
+	return err
+}
+
 func init() {
+	// memoTimelineCmd flags
+	memoTimelineCmd.Flags().Int("days", 7, "show memos from the last N days")
+	memoTimelineCmd.Flags().Bool("updated", false, "sort by updated_at instead of created_at")
+
 	// memoRandomCmd flags
 	memoRandomCmd.Flags().String("layer", "", "filter by layer (concrete, abstract)")
 
@@ -314,6 +396,7 @@ func init() {
 	memoCmd.AddCommand(memoDeleteCmd)
 	memoCmd.AddCommand(memoMoveCmd)
 	memoCmd.AddCommand(memoRandomCmd)
+	memoCmd.AddCommand(memoTimelineCmd)
 
 	rootCmd.AddCommand(memoCmd)
 }
