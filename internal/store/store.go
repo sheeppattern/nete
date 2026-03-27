@@ -390,6 +390,36 @@ func (s *Store) ListAllMemos() ([]*model.Memo, error) {
 	return scanMemos(rows)
 }
 
+// ListRecentMemos returns memos created or updated since the given time.
+// If noteID is non-zero, filters to that note. If byUpdated is true, uses updated_at.
+func (s *Store) ListRecentMemos(since time.Time, noteID int64, byUpdated bool) ([]*model.Memo, error) {
+	timeCol := "created_at"
+	orderCol := "created_at"
+	if byUpdated {
+		timeCol = "updated_at"
+		orderCol = "updated_at"
+	}
+
+	query := fmt.Sprintf(
+		`SELECT id, title, content, tags, layer, note_id, status, author, source, summary, created_at, updated_at
+		 FROM memos WHERE %s >= ?`, timeCol)
+	args := []interface{}{since.Format(time.RFC3339)}
+
+	if noteID != 0 {
+		query += " AND note_id = ?"
+		args = append(args, noteID)
+	}
+
+	query += fmt.Sprintf(" ORDER BY %s DESC", orderCol)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list recent memos: %w", err)
+	}
+	defer rows.Close()
+	return scanMemos(rows)
+}
+
 // MoveMemo changes the note_id for a memo.
 func (s *Store) MoveMemo(memoID, targetNoteID int64) error {
 	now := time.Now().UTC().Format(time.RFC3339)
